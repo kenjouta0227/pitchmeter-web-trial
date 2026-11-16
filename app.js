@@ -24,7 +24,7 @@ function placePill() { const b = tabs.find(t => t.dataset.tab === tab); const pi
 function selectTab(t) {
   if (t === tab && !$('tab-' + t).hidden) { placePill(); return; }
   if (tab === 'live' && t !== 'live') live.stop();
-  if (tab === 'file' && t !== 'file') { rec.cancel(); cam.close(); picker.close(); }
+  if (tab === 'file' && t !== 'file') rec.cancel();
   tab = t;
   for (const id of ['file', 'live', 'profile']) $('tab-' + id).hidden = id !== t;
   tabs.forEach(b => { const on = b.dataset.tab === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
@@ -174,7 +174,8 @@ const file = (() => {
   }
   function loop() { cancelAnimationFrame(raf); const step = () => { draw(); if (media && media.currentTime >= MAX_SECONDS) media.pause(); if (media && !media.paused) raf = requestAnimationFrame(step); }; raf = requestAnimationFrame(step); }
   function updateTime() { if (!media) return; const d = Math.min(MAX_SECONDS, media.duration || 0); $('seek').value = media.currentTime || 0; $('timeText').textContent = `${fmt(media.currentTime)} / ${fmt(d)}`; }
-  for (const id of ['fileInput', 'photoInput', 'captureInput']) $(id).addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; choose(f); });
+  $('pickBtn').onclick = () => $('fileInput').click(); // iOS は標準メニュー（写真ライブラリ / ビデオを撮る / ファイルを選択）を直接表示
+  for (const id of ['fileInput']) $(id).addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; choose(f); });
   $('playBtn').onclick = () => { if (!media) return; setAudioSession('playback'); if (media.paused) { if (media.currentTime >= Math.min(MAX_SECONDS, media.duration || Infinity) - 0.05) media.currentTime = 0; media.play().catch(() => status('再生を開始できませんでした。もう一度押してください。')); } else media.pause(); };
   $('stopBtn').onclick = () => { if (!media) return; media.pause(); media.currentTime = 0; updateTime(); draw(); };
   $('seek').oninput = () => { if (!media) return; media.currentTime = +$('seek').value; draw(); updateTime(); };
@@ -345,94 +346,6 @@ const rec = (() => {
   $('recClose').onclick = close;
   document.addEventListener('visibilitychange', () => { if (document.hidden) cancel(); });
   return { cancel: close };
-})();
-
-// ======================= 写真か、ファイルから選ぶ（シート）／動画を撮る =======================
-// 動画を撮る: スマホは <input capture="user">（前面カメラを動画モードで直接起動）。PC など capture が効かない環境はページ内で撮影。
-// 映像・音声は端末内のメモリだけで扱い、素材分析（file.choose）と同じ経路で解析する。送信・保存はしない。
-const picker = (() => {
-  const sheet = modal($('pickSheet'));
-  const isMobile = () => /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  $('pickBtn').onclick = () => sheet.open('pickPhoto');
-  $('pickCancel').onclick = () => sheet.close();
-  $('pickPhoto').onclick = () => { $('photoInput').click(); sheet.close(); };
-  $('pickFile').onclick = () => { $('fileInput').click(); sheet.close(); };
-  $('pickCamera').onclick = () => { if (isMobile()) { $('captureInput').click(); sheet.close(); } else { sheet.close(false); cam.open(); } };
-  return { close: () => sheet.close(false) };
-})();
-
-const cam = (() => {
-  const MAX = MAX_SECONDS;
-  let stream = null, recorder = null, chunks = [], t0 = 0, timer = 0, gen = 0, phase = 'idle', mime = '';
-  const m = modal($('camSheet'), () => close());
-  const st = (s) => { $('camState').textContent = s; };
-  const msg = (s) => { $('camMsg').textContent = s || ''; };
-  function ui() {
-    const b = $('camBtn'); b.classList.toggle('recording', phase === 'rec'); b.disabled = phase === 'prep' || phase === 'error';
-    $('camBtnText').textContent = phase === 'rec' ? '停止して解析' : '撮影開始';
-    b.setAttribute('aria-label', phase === 'rec' ? '撮影を停止して解析' : '撮影開始');
-    $('camTime').hidden = phase !== 'rec' && phase !== 'ready'; $('camTime').classList.toggle('rec', phase === 'rec');
-  }
-  const tick = () => { const s = phase === 'rec' ? (performance.now() - t0) / 1000 : 0; $('camTime').textContent = `${fmt(s)} / ${fmt(MAX)}`; if (phase === 'rec' && s >= MAX) stop(true); };
-  function release() { gen++; clearInterval(timer); timer = 0; if (stream) stream.getTracks().forEach(t => { t.onended = null; t.stop(); }); stream = null; $('camPreview').srcObject = null; setAudioSession('playback'); }
-  function fail(s) { release(); recorder = null; chunks = []; phase = 'error'; ui(); st(''); msg(s); }
-  function pickMime() {
-    if (!window.MediaRecorder) return null;
-    for (const t of ['video/mp4;codecs=avc1,mp4a', 'video/mp4', 'video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm']) { try { if (MediaRecorder.isTypeSupported(t)) return t; } catch (e) {} }
-    return '';
-  }
-  async function open() {
-    msg(''); phase = 'prep'; ui(); st('カメラを準備しています…'); m.open('camClose'); const my = ++gen;
-    try { live.stop(); } catch (e) {}
-    try { rec.cancel(); } catch (e) {}
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.isSecureContext) { fail('このブラウザではカメラを使えません（https で開いてください）。「写真」や「ファイル」から動画を選んでください。'); return; }
-    mime = pickMime(); if (mime === null) { fail('このブラウザは動画の撮影に対応していません。「写真」や「ファイル」から動画を選んでください。'); return; }
-    try {
-      setAudioSession('play-and-record');
-      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 } });
-      if (my !== gen) { s.getTracks().forEach(t => t.stop()); return; }
-      stream = s; $('camPreview').srcObject = s; try { await $('camPreview').play(); } catch (e) {}
-      s.getTracks().forEach(t => { t.onended = () => { if (phase === 'rec') stop(true); else fail('カメラかマイクが外れました。もう一度開いてください。'); }; });
-      phase = 'ready'; ui(); tick(); st(`「撮影開始」で録画します（最大${MAX / 60}分）`);
-      requestAnimationFrame(() => $('camBtn').focus());
-    } catch (e) {
-      if (my !== gen) return;
-      const n = e && e.name;
-      fail(n === 'NotAllowedError' || n === 'SecurityError' ? 'カメラとマイクが許可されていません。ブラウザの設定で許可してから、もう一度お試しください。'
-        : n === 'NotFoundError' || n === 'OverconstrainedError' || n === 'DevicesNotFoundError' ? 'カメラが見つかりませんでした。「写真」や「ファイル」から動画を選んでください。'
-        : n === 'NotReadableError' ? 'カメラをほかのアプリが使っています。閉じてからもう一度お試しください。'
-        : 'カメラを開始できませんでした。もう一度お試しください。');
-    }
-  }
-  function start() {
-    if (phase !== 'ready' || !stream) return;
-    try { recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); }
-    catch (e) { fail('このブラウザは動画の撮影に対応していません。「写真」や「ファイル」から動画を選んでください。'); return; }
-    chunks = []; recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-    recorder.onerror = () => fail('撮影中にエラーが起きました。もう一度お試しください。');
-    recorder.start(1000); t0 = performance.now(); phase = 'rec'; ui(); st('撮影中… 声を出してください'); timer = setInterval(tick, 250); tick();
-  }
-  function stop(analyze) {
-    if (phase !== 'rec' || !recorder) return;
-    const r = recorder, my = gen; recorder = null; phase = 'saving'; ui(); st('動画をまとめています…');
-    r.onstop = () => {
-      if (my !== gen) return;
-      const type = (r.mimeType || mime || 'video/webm').split(';')[0], ext = /mp4/.test(type) ? 'mp4' : 'webm';
-      const blob = new Blob(chunks, { type }); chunks = []; release(); phase = 'idle';
-      if (!analyze) return;
-      if (blob.size < 1000) { phase = 'error'; ui(); msg('撮影が短すぎました。もう一度お試しください。'); return; }
-      const d = new Date(), name = `撮影した動画 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}.${ext}`;
-      let f; try { f = new File([blob], name, { type }); } catch (e) { f = blob; f.name = name; }
-      m.close(false); ui(); file.choose(f);
-      requestAnimationFrame(() => { const ec = $('editCard'); if (ec && ec.scrollIntoView) ec.scrollIntoView({ block: 'start', behavior: 'smooth' }); });
-    };
-    try { r.stop(); } catch (e) { fail('撮影を終了できませんでした。'); }
-  }
-  function close() { if (recorder) { const r = recorder; recorder = null; r.onstop = null; try { r.stop(); } catch (e) {} } chunks = []; release(); phase = 'idle'; ui(); m.close(); }
-  $('camBtn').onclick = () => phase === 'rec' ? stop(true) : start();
-  $('camClose').onclick = close;
-  document.addEventListener('visibilitychange', () => { if (document.hidden && !$('camSheet').hidden) close(); });
-  return { open, close };
 })();
 
 selectTab('file');
