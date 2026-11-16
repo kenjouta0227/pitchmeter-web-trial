@@ -25,7 +25,7 @@ function render(ctx, w, h, state, range, vertical) {
     const g = ctx.createLinearGradient(x - bw / 2, y + length, x - bw / 2, y);
     g.addColorStop(0, 'rgb(59,196,224)'); g.addColorStop(0.5, 'rgb(166,120,255)'); g.addColorStop(1, 'rgb(255,140,107)');
     ctx.fillStyle = g; ctx.fillRect(x - bw / 2, y, bw, length); ctx.restore();
-    for (const [s, yy, a] of [['裏声', h * 0.195, state.uraBandAlpha], ['ミックス', h * 0.405, state.mixBandAlpha], ['地声', h * 0.64, 1]]) if (a > 0.01) Array.from(s).forEach((ch, i) => text(ch, w * 0.095, yy + i * w * 0.034, w * 0.027, a));
+    for (const [s, yy, a] of [['裏声', h * 0.195, state.uraBandAlpha], ['ミックス', h * 0.405, state.mixBandAlpha], ['地声', h * 0.64, state.chestBandAlpha ?? 1]]) if (a > 0.01) Array.from(s).forEach((ch, i) => text(ch, w * 0.095, yy + i * w * 0.034, w * 0.027, a));
     pointer(x, py, w * 0.022, w, true);
     if (state.readoutAlpha > 0) { text(state.hz.toFixed(1) + ' Hz', w * 0.255, py - w * 0.006, w * 0.027, state.readoutAlpha); text(C.noteLabel(state.hz), w * 0.255, py + w * 0.030, w * 0.030, state.readoutAlpha);
       const label = C.REG_LABEL[state.register]; if (label) text(label, w * 0.255, py + w * 0.064, w * 0.027, state.readoutAlpha); }
@@ -42,7 +42,7 @@ function render(ctx, w, h, state, range, vertical) {
     ctx.font = `600 ${gw * 0.032}px ${FONT}`; const rw = ctx.measureText(s).width;
     text(s, Math.max(left + rw / 2 + gw * 0.01, Math.min(left + gw - rw / 2 - gw * 0.01, left + position * gw)), top + gw * 0.038, gw * 0.032, state.readoutAlpha);
   }
-  for (const [s, x, a] of [['地声', left + gw / 6, 1], ['ミックス', w / 2, state.mixBandAlpha], ['裏声', left + gw * 5 / 6, state.uraBandAlpha]]) if (a > 0.01) text(s, x, top + gw * 0.092, gw * 0.026, a);
+  for (const [s, x, a] of [['地声', left + gw / 6, state.chestBandAlpha ?? 1], ['ミックス', w / 2, state.mixBandAlpha], ['裏声', left + gw * 5 / 6, state.uraBandAlpha]]) if (a > 0.01) text(s, x, top + gw * 0.092, gw * 0.026, a);
   const gy = top + gw * 0.123, gh = gw * 0.028;
   ctx.save(); rr(left, gy, gw, gh, gh / 2); ctx.clip();
   const g = ctx.createLinearGradient(left, gy, left + gw, gy);

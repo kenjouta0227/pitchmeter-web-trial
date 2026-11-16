@@ -396,19 +396,19 @@ const BandRule = {
    *  Horizontal: labels centred at 1/2 and 5/6, ~1em per glyph (0.026·gw), dot radius 0.019·gw.
    *  Vertical (9:16 canvas): stacked glyph columns, dot radius 0.022·w. */
   labelPositions(vertical, aspect) {
-    if (!vertical) { const glyph = 0.026, dot = 0.019; return { mix: 0.5 + 2 * glyph + dot, ura: 5 / 6 - 1 * glyph - dot }; }
+    if (!vertical) { const glyph = 0.026, dot = 0.019; return { chest: 1 / 6 + 1 * glyph + dot, mix: 0.5 + 2 * glyph + dot, ura: 5 / 6 - 1 * glyph - dot }; }
     const a = aspect || 9 / 16, sp = 0.034 * a, f = 0.027 * a, dot = 0.022 * a / 0.5;
     const pos = (y) => (0.68 - y) / 0.5;
-    const mixTop = 0.405 - 0.88 * f, uraBottom = 0.195 + 1 * sp + 0.12 * f;
-    return { mix: pos(mixTop) + dot, ura: pos(uraBottom) - dot };
+    const chestTop = 0.64 - 0.88 * f, mixTop = 0.405 - 0.88 * f, uraBottom = 0.195 + 1 * sp + 0.12 * f;
+    return { chest: pos(chestTop) + dot, mix: pos(mixTop) + dot, ura: pos(uraBottom) - dot };
   },
-  // 裏声 judgment at/left (vertical: at/below) of fixed ミックス -> hide ミックス; ミックス judgment at/right (vertical: at/above) of fixed 裏声 -> hide 裏声
+  // 裏声 judgment at/left (vertical: at/below) of fixed ミックス -> hide ミックス, same for fixed 地声 -> hide 地声; ミックス judgment at/right (vertical: at/above) of fixed 裏声 -> hide 裏声
   targets(register, judgmentVisible, position, vertical) {
-    if (!judgmentVisible) return { mix: 1, ura: 1 };
+    if (!judgmentVisible) return { chest: 1, mix: 1, ura: 1 };
     const at = BandRule.labelPositions(vertical);
-    if (register === REG.falsetto) return { mix: position <= at.mix ? 0 : 1, ura: 1 };
-    if (register === REG.mix) return { mix: 1, ura: position >= at.ura ? 0 : 1 };
-    return { mix: 1, ura: 1 };
+    if (register === REG.falsetto) return { chest: position <= at.chest ? 0 : 1, mix: position <= at.mix ? 0 : 1, ura: 1 };
+    if (register === REG.mix) return { chest: 1, mix: 1, ura: position >= at.ura ? 0 : 1 };
+    return { chest: 1, mix: 1, ura: 1 };
   },
   fadeSeconds: 0.05,
   fade(v, t, dt) { return v + (t - v) * (1 - Math.exp(-dt / BandRule.fadeSeconds)); },
@@ -418,7 +418,7 @@ const BandRule = {
 class GaugeTimeline {
   constructor(frames, range, vertical) { this.vertical = !!vertical; this.frames = frames || []; this.range = range || makeRange(this.frames); this.fixedRange = !!range || !!frames;
     this.valid = false; this.from = 0; this.to = 0; this.start = 0; this.lastPitch = -99; this.index = -1; this.opacity = 0;
-    this.lastVoiced = -99; this.readoutHz = 0; this.readoutTime = -99; this.readoutRegister = 0; this.mixBand = 1; this.uraBand = 1; this.lastTick = 0; this.lastRangeUpdate = -99; }
+    this.lastVoiced = -99; this.readoutHz = 0; this.readoutTime = -99; this.readoutRegister = 0; this.chestBand = 1; this.mixBand = 1; this.uraBand = 1; this.lastTick = 0; this.lastRangeUpdate = -99; }
   value(t) { const u = Math.min(1, Math.max(0, (t - this.start) / 0.12)); return this.from + (this.to - this.from) * u * u * (3 - 2 * u); }
   append(fr) { for (const f of fr) this.frames.push(f); }
   tick(t, dt, live) {
@@ -440,8 +440,8 @@ class GaugeTimeline {
     const midi = this.valid ? this.value(t) : (range.low + range.high) / 2, readoutAlpha = this.readoutHz > 0 ? 1 - fade * fade * (3 - 2 * fade) : 0;
     const band = BandRule.targets(this.readoutRegister, readoutAlpha > 0.01, BandRule.position(midi, range), this.vertical);
     const d = dt !== undefined ? dt : 1 / 30;
-    this.mixBand = BandRule.fade(this.mixBand, band.mix, d); this.uraBand = BandRule.fade(this.uraBand, band.ura, d);
-    return { midi, opacity: this.opacity, hz: this.readoutHz, readoutAlpha, register: this.readoutRegister, mixBandAlpha: this.mixBand, uraBandAlpha: this.uraBand };
+    this.chestBand = BandRule.fade(this.chestBand, band.chest, d); this.mixBand = BandRule.fade(this.mixBand, band.mix, d); this.uraBand = BandRule.fade(this.uraBand, band.ura, d);
+    return { midi, opacity: this.opacity, hz: this.readoutHz, readoutAlpha, register: this.readoutRegister, chestBandAlpha: this.chestBand, mixBandAlpha: this.mixBand, uraBandAlpha: this.uraBand };
   }
 }
 /** Precomputed 30 fps states for file playback (GaugeTimeline.init). */
