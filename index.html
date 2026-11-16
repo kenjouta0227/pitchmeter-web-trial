@@ -12,23 +12,24 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div id="trialBanner" role="note">試作版（ウェブ）・広告/課金なし・音声は端末の中だけで処理</div>
+<div id="trialBanner" role="note">試作版（ウェブ）・広告/課金なし</div>
 
 <!-- 素材分析 -->
 <section id="tab-file" class="pane" aria-label="素材分析">
   <div class="scroll">
     <div class="row"><span class="eyebrow">PITCH METER</span><span class="spacer"></span><button class="btn" id="guideBtn">使い方</button></div>
-    <h1 class="hero">声の高さを、<br>なめらかに映す。</h1>
-    <div class="card">
+    <h1 class="hero file">声の高さを、<br>なめらかに映す。</h1>
+    <div class="card trial">
       <div class="row"><strong>試作版（ウェブ）</strong><span class="spacer"></span><span class="badge">最大300秒</span></div>
-      <p class="caption">プラン・購入・広告はウェブ版にはありません。解析とメーター表示（Fullと同じ横メーター・縦メーター）を試せます。</p>
     </div>
-    <div class="stack">
-      <button class="btn primary big" id="pickBtn"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M7 5v14M17 5v14M3 9.5h4M3 14.5h4M17 9.5h4M17 14.5h4"/></svg>動画・音声を選ぶ</button>
-      <button class="btn big" id="photoBtn"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.5" cy="10" r="1.6"/><path d="M4 17l5-5 4 4 3-3 4 4"/></svg>写真から選ぶ</button>
+    <div class="stack pick">
+      <button class="btn primary big" id="pickBtn" aria-haspopup="dialog" aria-controls="pickSheet"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M7 5v14M17 5v14M3 9.5h4M3 14.5h4M17 9.5h4M17 14.5h4"/></svg>写真か、ファイルから選ぶ</button>
       <input type="file" id="fileInput" accept="audio/*,video/*,.mp3,.m4a,.wav,.aac,.mp4,.mov,.caf,.aif,.aiff" hidden>
       <input type="file" id="photoInput" accept="video/*" hidden>
-      <p class="caption muted">ファイルはこの端末の中だけで解析します。アップロードはしません。ウェブ版は伴奏分離なし（原音で解析）。</p>
+      <!-- 動画を撮る（スマホ: 前面カメラを動画モードで直接起動。PCでは capture が無視されるためページ内撮影へ） -->
+      <input type="file" id="captureInput" accept="video/*" capture="user" hidden>
+      <!-- サンプル音声（録音は端末内のメモリだけ・解析は素材と同じ経路） -->
+      <button class="btn big" id="sampleBtn"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>サンプル音声を追加</button>
     </div>
     <div class="card" id="editCard" hidden>
       <div class="caption" id="fileName"></div>
@@ -97,7 +98,38 @@
   </div>
 </nav>
 
-<div id="sheet" class="sheet" hidden role="dialog" aria-modal="true">
+<div id="pickSheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="pickTitle">
+  <div class="sheetBody pick-sheet">
+    <strong id="pickTitle" class="pick-title">素材を選ぶ</strong>
+    <div class="pick-list" role="menu" aria-labelledby="pickTitle">
+      <button class="pick-item" role="menuitem" id="pickPhoto"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.5" cy="10" r="1.6"/><path d="M4 17l5-5 4 4 3-3 4 4"/></svg><span>写真</span></button>
+      <button class="pick-item" role="menuitem" id="pickFile"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 13h6M9 17h6"/></svg><span>ファイル</span></button>
+      <button class="pick-item" role="menuitem" id="pickCamera"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="6" width="13" height="12" rx="2.5"/><path d="M15.5 10.5l6-3.5v10l-6-3.5z"/></svg><span>動画を撮る</span></button>
+    </div>
+    <button class="btn big pick-cancel" id="pickCancel">キャンセル</button>
+  </div>
+</div>
+<div id="camSheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="camTitle">
+  <div class="sheetBody cam-sheet">
+    <div class="row"><strong id="camTitle">動画を撮る</strong><span class="spacer"></span><button class="btn small" id="camClose">閉じる</button></div>
+    <div class="cam-stage"><video id="camPreview" playsinline muted autoplay></video><span class="cam-time" id="camTime" hidden>0:00 / 5:00</span></div>
+    <div class="cam-state" id="camState" aria-live="polite">カメラを準備しています…</div>
+    <button class="btn primary big" id="camBtn" disabled><span class="rec-dot" aria-hidden="true"></span><span id="camBtnText">撮影開始</span></button>
+    <p class="rec-msg" id="camMsg" role="alert"></p>
+  </div>
+</div>
+<div id="recSheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="recTitle">
+  <div class="sheetBody rec-sheet">
+    <div class="row"><strong id="recTitle">サンプル音声を追加</strong><span class="spacer"></span><button class="btn small" id="recClose">閉じる</button></div>
+    <p class="rec-instr">低い裏声から高い裏声まで滑らかにつなげて、数秒声を出してください。</p>
+    <div class="rec-count" id="recCount" aria-live="polite">5</div>
+    <div class="rec-state" id="recState">約5秒で自動で止まります</div>
+    <div class="rec-level"><i id="recLevelBar"></i></div>
+    <button class="btn primary big" id="recBtn"><span class="rec-dot" aria-hidden="true"></span><span id="recBtnText">録音する</span></button>
+    <p class="rec-msg" id="recMsg" aria-live="polite"></p>
+  </div>
+</div>
+<div id="sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
   <div class="sheetBody">
     <div class="row"><strong id="sheetTitle"></strong><span class="spacer"></span><button class="btn small" id="sheetClose">閉じる</button></div>
     <div id="sheetContent"></div>

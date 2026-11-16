@@ -24,6 +24,7 @@ function placePill() { const b = tabs.find(t => t.dataset.tab === tab); const pi
 function selectTab(t) {
   if (t === tab && !$('tab-' + t).hidden) { placePill(); return; }
   if (tab === 'live' && t !== 'live') live.stop();
+  if (tab === 'file' && t !== 'file') { rec.cancel(); cam.close(); picker.close(); }
   tab = t;
   for (const id of ['file', 'live', 'profile']) $('tab-' + id).hidden = id !== t;
   tabs.forEach(b => { const on = b.dataset.tab === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
@@ -33,16 +34,36 @@ tabs.forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
 window.addEventListener('resize', () => { placePill(); file.resize(); });
 
 // ---------- sheets ----------
-function openSheet(title, tpl) { $('sheetTitle').textContent = title; const c = $('sheetContent'); c.innerHTML = ''; c.appendChild($(tpl).content.cloneNode(true)); $('sheet').hidden = false; }
-$('sheetClose').onclick = () => { $('sheet').hidden = true; };
-$('sheet').addEventListener('click', (e) => { if (e.target === $('sheet')) $('sheet').hidden = true; });
+let infoSheet = null;
+function openSheet(title, tpl) { $('sheetTitle').textContent = title; const c = $('sheetContent'); c.innerHTML = ''; c.appendChild($(tpl).content.cloneNode(true)); (infoSheet = infoSheet || modal($('sheet'))).open('sheetClose'); }
+$('sheetClose').onclick = () => { if (infoSheet) infoSheet.close(); else $('sheet').hidden = true; };
 document.querySelectorAll('[data-sheet]').forEach(b => b.addEventListener('click', () => {
   const k = b.dataset.sheet; openSheet({ support: 'サポート', feedback: 'ご意見・ご要望', license: 'ライセンス' }[k], 't-' + k);
 }));
 $('guideBtn').onclick = () => openSheet('使い方', 't-guide');
 
 function canvasFit(cv, cssW, cssH) { const dpr = Math.min(3, window.devicePixelRatio || 1); const w = Math.max(2, Math.round(cssW * dpr)), h = Math.max(2, Math.round(cssH * dpr)); if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; } return [w, h]; }
-const fmt = (s) => { s = Math.max(0, s || 0); const m = Math.floor(s / 60), r = Math.floor(s % 60); return m + ':' + String(r).padStart(2, '0'); };
+const fmt = (s) => { s = isFinite(s) ? Math.max(0, s || 0) : 0; const m = Math.floor(s / 60), r = Math.floor(s % 60); return m + ':' + String(r).padStart(2, '0'); };
+
+// ---------- モーダルシート共通（フォーカス移動・Tab の閉じ込め・Escape で閉じる・閉じたら元の場所へ戻す） ----------
+const modals = new Map();
+function modal(el, onClose) {
+  let back = null;
+  const focusables = () => Array.from(el.querySelectorAll('button:not([disabled]),[href],input:not([hidden]),[tabindex]:not([tabindex="-1"])')).filter(x => x.offsetParent !== null);
+  const api = {
+    open(first) { back = document.activeElement; el.hidden = false; requestAnimationFrame(() => { const f = first ? $(first) : focusables()[0]; if (f) f.focus(); }); },
+    close(restore = true) { if (el.hidden) return; el.hidden = true; if (restore && back && back.focus) back.focus(); back = null; },
+    requestClose() { onClose ? onClose() : api.close(); },
+  };
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); api.requestClose(); return; }
+    if (e.key === 'Tab') { const f = focusables(); if (!f.length) return; const i = f.indexOf(document.activeElement);
+      if (e.shiftKey && (i <= 0)) { e.preventDefault(); f[f.length - 1].focus(); } else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); } }
+  });
+  el.addEventListener('click', (e) => { if (e.target === el) api.requestClose(); });
+  modals.set(el.id, api); return api;
+}
+document.addEventListener('keydown', (e) => { if (e.key !== 'Escape') return; for (const [id, m] of modals) if (!$(id).hidden) { e.preventDefault(); m.requestClose(); break; } });
 
 // ======================= 素材分析 =======================
 const file = (() => {
@@ -119,7 +140,13 @@ const file = (() => {
     $('video').hidden = !isVideo;
     if (!isVideo) { meterCanvas = document.createElement('canvas'); meterCanvas.className = 'meterOnly'; $('stage').insertBefore(meterCanvas, $('overlay')); $('overlay').hidden = true; }
     else $('overlay').hidden = false;
-    media.onloadedmetadata = () => { $('seek').max = Math.min(MAX_SECONDS, media.duration || 0) || 1; resize(); draw(); updateTime(); };
+    media.onloadedmetadata = () => {
+      const ready = () => { $('seek').max = Math.min(MAX_SECONDS, isFinite(media.duration) ? media.duration : (frames ? frames.length * 0.02 : 0)) || 1; resize(); draw(); updateTime(); };
+      if (media.duration === Infinity) { // MediaRecorder の webm は長さが未記録 → 末尾へシークして長さを確定させる
+        const fix = () => { if (isFinite(media.duration)) { media.removeEventListener('durationchange', fix); media.currentTime = 0; ready(); } };
+        media.addEventListener('durationchange', fix); try { media.currentTime = 1e9; } catch (e) {} setTimeout(() => { media.removeEventListener('durationchange', fix); ready(); }, 1500);
+      } else ready();
+    };
     media.ontimeupdate = updateTime;
     media.onplay = () => { setAudioSession('playback'); $('playBtn').textContent = '一時停止'; $('playState').textContent = '再生中'; loop(); };
     media.onpause = () => { $('playBtn').textContent = '再生'; $('playState').textContent = '停止中'; draw(); };
@@ -147,9 +174,7 @@ const file = (() => {
   }
   function loop() { cancelAnimationFrame(raf); const step = () => { draw(); if (media && media.currentTime >= MAX_SECONDS) media.pause(); if (media && !media.paused) raf = requestAnimationFrame(step); }; raf = requestAnimationFrame(step); }
   function updateTime() { if (!media) return; const d = Math.min(MAX_SECONDS, media.duration || 0); $('seek').value = media.currentTime || 0; $('timeText').textContent = `${fmt(media.currentTime)} / ${fmt(d)}`; }
-  $('pickBtn').onclick = () => $('fileInput').click();
-  $('photoBtn').onclick = () => $('photoInput').click();
-  for (const id of ['fileInput', 'photoInput']) $(id).addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; choose(f); });
+  for (const id of ['fileInput', 'photoInput', 'captureInput']) $(id).addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; choose(f); });
   $('playBtn').onclick = () => { if (!media) return; setAudioSession('playback'); if (media.paused) { if (media.currentTime >= Math.min(MAX_SECONDS, media.duration || Infinity) - 0.05) media.currentTime = 0; media.play().catch(() => status('再生を開始できませんでした。もう一度押してください。')); } else media.pause(); };
   $('stopBtn').onclick = () => { if (!media) return; media.pause(); media.currentTime = 0; updateTime(); draw(); };
   $('seek').oninput = () => { if (!media) return; media.currentTime = +$('seek').value; draw(); updateTime(); };
@@ -231,6 +256,183 @@ const live = (() => {
   document.addEventListener('visibilitychange', () => { if (document.hidden && running) stop(); });
   draw();
   return { stop, draw: () => { if (!running) draw(); } };
+})();
+
+// ======================= サンプル音声を追加（録音シート） =======================
+// マイク音声はこの端末のメモリだけ。WAVにして素材分析（file.choose）と同じ解析経路へ渡す。送信・保存はしない。
+const rec = (() => {
+  const SECONDS = 5, COUNT = 3;
+  let phase = 'idle', ctx = null, stream = null, node = null, src = null, gen = 0, chunks = [], got = 0, timer = 0, startAt = 0, peak = 0;
+  const btn = $('recBtn');
+  const msg = (s) => { $('recMsg').textContent = s || ''; };
+  const count = (s) => { $('recCount').textContent = s; };
+  const state = (s) => { $('recState').textContent = s; };
+  function ui() {
+    btn.classList.toggle('recording', phase !== 'idle');
+    $('recBtnText').textContent = phase === 'idle' ? '録音する' : phase === 'rec' ? '停止' : 'やめる';
+    btn.setAttribute('aria-label', phase === 'idle' ? '録音する' : phase === 'rec' ? '録音を停止して解析' : '録音をやめる');
+    if (phase === 'idle') { count(String(SECONDS)); state('約5秒で自動で止まります'); $('recLevelBar').style.width = '0%'; }
+  }
+  function teardown() {
+    gen++; clearInterval(timer); timer = 0;
+    try { if (src) src.disconnect(); if (node) { node.disconnect(); if (node.port) node.port.onmessage = null; node.onaudioprocess = null; } } catch (e) {}
+    if (stream) stream.getTracks().forEach(t => { t.onended = null; t.stop(); });
+    if (ctx) { try { ctx.close(); } catch (e) {} }
+    stream = null; node = null; src = null; ctx = null; setAudioSession('playback');
+  }
+  function fail(m) { teardown(); chunks = []; phase = 'idle'; ui(); msg(m); }
+  function cancel() { if (phase === 'idle') return; teardown(); chunks = []; phase = 'idle'; ui(); }
+  const m = modal($('recSheet'), () => close());
+  function open() { msg(''); phase = 'idle'; ui(); m.open('recBtn'); }
+  function close() { cancel(); m.close(); }
+  function wav(samples, rate) {
+    const n = samples.length, b = new ArrayBuffer(44 + n * 2), v = new DataView(b); const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
+    for (let i = 0; i < n; i++) { const x = Math.max(-1, Math.min(1, samples[i])); v.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true); }
+    return new Blob([b], { type: 'audio/wav' });
+  }
+  function finish() {
+    if (phase !== 'rec') return;
+    const rate = ctx ? ctx.sampleRate : 48000; teardown(); phase = 'idle'; ui();
+    const all = new Float32Array(got); let o = 0; for (const c of chunks) { all.set(c, o); o += c.length; } chunks = [];
+    if (all.length < rate * 0.5) { msg('録音が短すぎました。もう一度「録音する」を押してください。'); return; }
+    let sq = 0, pk = 0; for (let i = 0; i < all.length; i++) { const x = all[i]; sq += x * x; if (Math.abs(x) > pk) pk = Math.abs(x); }
+    if (pk < 0.01 || 10 * Math.log10(sq / all.length + 1e-20) < -55) { msg('声が小さくて聞き取れませんでした。マイクに近づいて、もう少し大きめに録ってください。'); return; }
+    const d = new Date(), name = `サンプル音声 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}.wav`;
+    let f; try { f = new File([wav(all, rate)], name, { type: 'audio/wav' }); } catch (e) { f = wav(all, rate); f.name = name; }
+    m.close(false);
+    file.choose(f);
+    requestAnimationFrame(() => { const ec = $('editCard'); if (ec && ec.scrollIntoView) ec.scrollIntoView({ block: 'start', behavior: 'smooth' }); });
+  }
+  async function start() {
+    msg(''); phase = 'prep'; ui(); count('…'); state('マイクを準備しています'); const my = ++gen;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.isSecureContext) { fail('このブラウザではマイクを使えません（https で開いてください）。'); return; }
+    try { live.stop(); } catch (e) {}
+    try {
+      setAudioSession('play-and-record');
+      const AC = window.AudioContext || window.webkitAudioContext; ctx = new AC();
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 }, video: false });
+      if (my !== gen) { stream.getTracks().forEach(t => t.stop()); return; }
+      if (ctx.state === 'suspended') await ctx.resume();
+      const track = stream.getAudioTracks()[0]; if (track) track.onended = () => { if (phase === 'rec') finish(); else fail('マイクが外れたので録音をやめました。'); };
+      src = ctx.createMediaStreamSource(stream);
+      const sink = ctx.createGain(); sink.gain.value = 0; sink.connect(ctx.destination);
+      const onChunk = (buf) => { if (my !== gen) return; let p = 0; for (let i = 0; i < buf.length; i++) { const a = Math.abs(buf[i]); if (a > p) p = a; } peak = Math.max(p, peak * 0.85);
+        $('recLevelBar').style.width = Math.min(100, Math.round(Math.sqrt(peak) * 140)) + '%';
+        if (phase === 'rec') { chunks.push(buf); got += buf.length; if (got >= SECONDS * ctx.sampleRate) finish(); } };
+      if (ctx.audioWorklet && window.AudioWorkletNode) {
+        await ctx.audioWorklet.addModule('capture-worklet.js'); if (my !== gen) return;
+        node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
+        node.port.onmessage = (e) => onChunk(e.data);
+      } else { node = ctx.createScriptProcessor(2048, 1, 1); node.onaudioprocess = (e) => onChunk(new Float32Array(e.inputBuffer.getChannelData(0))); }
+      src.connect(node); node.connect(sink);
+      ctx.onstatechange = () => { if (ctx && ctx.state === 'interrupted') fail('ほかの音声で中断されたので録音をやめました。'); };
+      phase = 'count'; ui(); let left = COUNT; count(String(left)); state('まもなく録音が始まります。低い裏声から準備してください');
+      timer = setInterval(() => { if (my !== gen) return;
+        if (phase === 'count') { left--; if (left > 0) { count(String(left)); return; }
+          phase = 'rec'; chunks = []; got = 0; startAt = performance.now(); ui(); count(String(SECONDS)); state('録音中… 低い裏声 → 高い裏声へ'); return; }
+        if (phase === 'rec') { count(String(Math.max(0, SECONDS - Math.floor((performance.now() - startAt) / 1000))));
+          if (performance.now() - startAt > SECONDS * 1000 + 1500) finish(); } }, 1000);
+    } catch (e) {
+      if (my !== gen) return;
+      const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
+      fail(denied ? 'マイクが許可されていません。ブラウザの設定でマイクを許可してから、もう一度押してください。' : (e && e.name === 'NotFoundError' ? 'マイクが見つかりませんでした。' : '録音を開始できませんでした。もう一度試してください。'));
+    }
+  }
+  btn.onclick = () => { if (phase === 'idle') start(); else if (phase === 'rec') finish(); else cancel(); };
+  $('sampleBtn').onclick = open;
+  $('recClose').onclick = close;
+  document.addEventListener('visibilitychange', () => { if (document.hidden) cancel(); });
+  return { cancel: close };
+})();
+
+// ======================= 写真か、ファイルから選ぶ（シート）／動画を撮る =======================
+// 動画を撮る: スマホは <input capture="user">（前面カメラを動画モードで直接起動）。PC など capture が効かない環境はページ内で撮影。
+// 映像・音声は端末内のメモリだけで扱い、素材分析（file.choose）と同じ経路で解析する。送信・保存はしない。
+const picker = (() => {
+  const sheet = modal($('pickSheet'));
+  const isMobile = () => /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  $('pickBtn').onclick = () => sheet.open('pickPhoto');
+  $('pickCancel').onclick = () => sheet.close();
+  $('pickPhoto').onclick = () => { $('photoInput').click(); sheet.close(); };
+  $('pickFile').onclick = () => { $('fileInput').click(); sheet.close(); };
+  $('pickCamera').onclick = () => { if (isMobile()) { $('captureInput').click(); sheet.close(); } else { sheet.close(false); cam.open(); } };
+  return { close: () => sheet.close(false) };
+})();
+
+const cam = (() => {
+  const MAX = MAX_SECONDS;
+  let stream = null, recorder = null, chunks = [], t0 = 0, timer = 0, gen = 0, phase = 'idle', mime = '';
+  const m = modal($('camSheet'), () => close());
+  const st = (s) => { $('camState').textContent = s; };
+  const msg = (s) => { $('camMsg').textContent = s || ''; };
+  function ui() {
+    const b = $('camBtn'); b.classList.toggle('recording', phase === 'rec'); b.disabled = phase === 'prep' || phase === 'error';
+    $('camBtnText').textContent = phase === 'rec' ? '停止して解析' : '撮影開始';
+    b.setAttribute('aria-label', phase === 'rec' ? '撮影を停止して解析' : '撮影開始');
+    $('camTime').hidden = phase !== 'rec' && phase !== 'ready'; $('camTime').classList.toggle('rec', phase === 'rec');
+  }
+  const tick = () => { const s = phase === 'rec' ? (performance.now() - t0) / 1000 : 0; $('camTime').textContent = `${fmt(s)} / ${fmt(MAX)}`; if (phase === 'rec' && s >= MAX) stop(true); };
+  function release() { gen++; clearInterval(timer); timer = 0; if (stream) stream.getTracks().forEach(t => { t.onended = null; t.stop(); }); stream = null; $('camPreview').srcObject = null; setAudioSession('playback'); }
+  function fail(s) { release(); recorder = null; chunks = []; phase = 'error'; ui(); st(''); msg(s); }
+  function pickMime() {
+    if (!window.MediaRecorder) return null;
+    for (const t of ['video/mp4;codecs=avc1,mp4a', 'video/mp4', 'video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm']) { try { if (MediaRecorder.isTypeSupported(t)) return t; } catch (e) {} }
+    return '';
+  }
+  async function open() {
+    msg(''); phase = 'prep'; ui(); st('カメラを準備しています…'); m.open('camClose'); const my = ++gen;
+    try { live.stop(); } catch (e) {}
+    try { rec.cancel(); } catch (e) {}
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.isSecureContext) { fail('このブラウザではカメラを使えません（https で開いてください）。「写真」や「ファイル」から動画を選んでください。'); return; }
+    mime = pickMime(); if (mime === null) { fail('このブラウザは動画の撮影に対応していません。「写真」や「ファイル」から動画を選んでください。'); return; }
+    try {
+      setAudioSession('play-and-record');
+      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 } });
+      if (my !== gen) { s.getTracks().forEach(t => t.stop()); return; }
+      stream = s; $('camPreview').srcObject = s; try { await $('camPreview').play(); } catch (e) {}
+      s.getTracks().forEach(t => { t.onended = () => { if (phase === 'rec') stop(true); else fail('カメラかマイクが外れました。もう一度開いてください。'); }; });
+      phase = 'ready'; ui(); tick(); st(`「撮影開始」で録画します（最大${MAX / 60}分）`);
+      requestAnimationFrame(() => $('camBtn').focus());
+    } catch (e) {
+      if (my !== gen) return;
+      const n = e && e.name;
+      fail(n === 'NotAllowedError' || n === 'SecurityError' ? 'カメラとマイクが許可されていません。ブラウザの設定で許可してから、もう一度お試しください。'
+        : n === 'NotFoundError' || n === 'OverconstrainedError' || n === 'DevicesNotFoundError' ? 'カメラが見つかりませんでした。「写真」や「ファイル」から動画を選んでください。'
+        : n === 'NotReadableError' ? 'カメラをほかのアプリが使っています。閉じてからもう一度お試しください。'
+        : 'カメラを開始できませんでした。もう一度お試しください。');
+    }
+  }
+  function start() {
+    if (phase !== 'ready' || !stream) return;
+    try { recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); }
+    catch (e) { fail('このブラウザは動画の撮影に対応していません。「写真」や「ファイル」から動画を選んでください。'); return; }
+    chunks = []; recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    recorder.onerror = () => fail('撮影中にエラーが起きました。もう一度お試しください。');
+    recorder.start(1000); t0 = performance.now(); phase = 'rec'; ui(); st('撮影中… 声を出してください'); timer = setInterval(tick, 250); tick();
+  }
+  function stop(analyze) {
+    if (phase !== 'rec' || !recorder) return;
+    const r = recorder, my = gen; recorder = null; phase = 'saving'; ui(); st('動画をまとめています…');
+    r.onstop = () => {
+      if (my !== gen) return;
+      const type = (r.mimeType || mime || 'video/webm').split(';')[0], ext = /mp4/.test(type) ? 'mp4' : 'webm';
+      const blob = new Blob(chunks, { type }); chunks = []; release(); phase = 'idle';
+      if (!analyze) return;
+      if (blob.size < 1000) { phase = 'error'; ui(); msg('撮影が短すぎました。もう一度お試しください。'); return; }
+      const d = new Date(), name = `撮影した動画 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}.${ext}`;
+      let f; try { f = new File([blob], name, { type }); } catch (e) { f = blob; f.name = name; }
+      m.close(false); ui(); file.choose(f);
+      requestAnimationFrame(() => { const ec = $('editCard'); if (ec && ec.scrollIntoView) ec.scrollIntoView({ block: 'start', behavior: 'smooth' }); });
+    };
+    try { r.stop(); } catch (e) { fail('撮影を終了できませんでした。'); }
+  }
+  function close() { if (recorder) { const r = recorder; recorder = null; r.onstop = null; try { r.stop(); } catch (e) {} } chunks = []; release(); phase = 'idle'; ui(); m.close(); }
+  $('camBtn').onclick = () => phase === 'rec' ? stop(true) : start();
+  $('camClose').onclick = close;
+  document.addEventListener('visibilitychange', () => { if (document.hidden && !$('camSheet').hidden) close(); });
+  return { open, close };
 })();
 
 selectTab('file');

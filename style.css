@@ -57,3 +57,49 @@ input[type=range]{width:100%;accent-color:var(--pink)}
 .sheetBody{width:100%;max-height:85%;overflow:auto;background:var(--panel);border-radius:20px 20px 0 0;padding:18px 18px calc(24px + var(--sab));font-size:14px;line-height:1.7}
 .guide{padding-left:1.2em}
 @media (min-width:700px){.scroll,.pinned{max-width:720px;margin:0 auto;width:100%}#tabbar{max-width:520px;margin:0 auto}}
+/* 素材分析: 素材ボタンを主役に */
+.hero.file{font-size:24px;line-height:1.4;margin:8px 0 12px}
+.card.trial{padding:12px 16px;gap:0;margin-bottom:16px;border-radius:14px}
+.card.trial strong{font-size:14px}
+.stack.pick{gap:10px}
+.stack.pick .btn.big{min-height:58px;font-size:19px;font-weight:700;border-radius:16px}
+.stack.pick .btn.big:not(.primary){border-color:rgba(255,255,255,.28)}
+.stack.pick .caption{font-size:11.5px}
+/* サンプル音声を追加（録音シート） */
+.rec-sheet{display:flex;flex-direction:column;gap:12px;padding-top:16px}
+.rec-instr{margin:2px 0 0;font-size:15px;line-height:1.6}
+.rec-count{font-size:56px;line-height:1;font-weight:700;text-align:center;margin-top:6px;font-variant-numeric:tabular-nums;background:var(--accent);-webkit-background-clip:text;background-clip:text;color:transparent}
+.rec-state{text-align:center;font-size:13px;color:var(--muted);min-height:20px}
+.rec-level{height:8px;border-radius:4px;background:rgba(255,255,255,.1);overflow:hidden}
+.rec-level i{display:block;height:100%;width:0;background:var(--accent);transition:width .08s linear}
+.rec-dot{width:12px;height:12px;border-radius:50%;background:currentColor}
+#recBtn.recording .rec-dot{border-radius:3px}
+#recBtn.recording{background:var(--control);color:var(--text);border:1px solid var(--pink)}
+.rec-msg{margin:0;font-size:13px;line-height:1.6;color:var(--pink);min-height:0}
+.rec-msg:empty{display:none}
+/* サンプル音声を追加: 白基調（形・大きさは他の素材ボタンと同じ） */
+.stack.pick #sampleBtn{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.8);color:#fff;transition:background-color .15s,border-color .15s,transform .08s}
+.stack.pick #sampleBtn .ico{stroke:#fff;color:#fff}
+@media (hover:hover){.stack.pick #sampleBtn:hover{background:rgba(255,255,255,.2);border-color:rgba(255,255,255,.9)}}
+.stack.pick #sampleBtn:active{background:rgba(255,255,255,.26);border-color:#fff;transform:scale(.985)}
+.stack.pick #sampleBtn:focus{outline:none}
+.stack.pick #sampleBtn:focus-visible{outline:2px solid rgba(255,255,255,.9);outline-offset:3px}
+/* 素材の選択シート（写真 / ファイル / 動画を撮る） */
+.pick-sheet{display:flex;flex-direction:column;gap:12px;padding-top:14px}
+.pick-title{font-size:15px;text-align:center;color:var(--muted);font-weight:600}
+.pick-list{display:flex;flex-direction:column;background:var(--control);border-radius:16px;overflow:hidden}
+.pick-item{display:flex;align-items:center;gap:12px;width:100%;min-height:56px;padding:12px 18px;background:none;border:0;border-bottom:1px solid rgba(255,255,255,.07);color:var(--text);font-size:17px;font-weight:600;text-align:left;cursor:pointer}
+.pick-item:last-child{border-bottom:0}
+.pick-item:active{background:rgba(255,255,255,.08)}
+.pick-item:focus-visible,.pick-cancel:focus-visible,#camBtn:focus-visible,#camClose:focus-visible{outline:2px solid rgba(255,255,255,.9);outline-offset:-2px}
+.pick-cancel{font-weight:700}
+/* ページ内撮影（PCなど capture 非対応のとき） */
+.cam-sheet{display:flex;flex-direction:column;gap:12px;padding-top:16px}
+.cam-stage{position:relative;width:100%;max-height:52vh;aspect-ratio:3/4;background:#000;border-radius:16px;overflow:hidden;align-self:center}
+@media (min-aspect-ratio:1/1){.cam-stage{aspect-ratio:16/9}}
+.cam-stage video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+.cam-time{position:absolute;top:10px;left:10px;padding:3px 9px;border-radius:999px;background:rgba(0,0,0,.55);font-size:13px;font-variant-numeric:tabular-nums;color:#fff}
+.cam-time.rec::before{content:"";display:inline-block;width:8px;height:8px;margin-right:6px;border-radius:50%;background:#ff4d6a;vertical-align:1px}
+.cam-state{text-align:center;font-size:13px;color:var(--muted);min-height:20px}
+#camBtn.recording{background:var(--control);color:var(--text);border:1px solid var(--pink)}
+#camBtn.recording .rec-dot{border-radius:3px}

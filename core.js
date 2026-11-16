@@ -104,13 +104,14 @@ function fft(re, im) {
   }
 }
 
-// ---------------- RegisterClassifier (register-v1-20261117) ----------------
+// ---------------- RegisterClassifier (register-v1.1-20261117) ----------------
 const RC = {
-  weightHrich: -0.9218837323090514, weightCpp: -0.24418134655320295, bias: 7.689149848060506,
+  weightHrich: -0.9218837323090514, weightCpp: -0.4883626931064059, bias: 8.665875234273317,
+  kOct: 6.0, fRefHz: 698.0, mixFloorHz: 440.0,
   f0Min: 150.0, f0Max: 1400.0, yinThreshold: 0.15, subRelDb: -30.0, maxHarmonicHz: 5000.0,
   cppFmax: 8000.0, cppBins: 512, cppFloorDb: 80.0,
-  gateMinRmsDbfs: -50.0, gateMaxAperiodicity: 0.20, gateMinF0: 440.0, gateMaxF0: 1000.0,
-  medianFrames: 17, pFalsetto: 0.65, pMix: 0.35, stableFrames: 6, minValidFraction: 0.5,
+  gateMinRmsDbfs: -50.0, gateMaxAperiodicity: 0.20, gateMinF0: 387.0, gateMaxF0: 1000.0,
+  medianFrames: 17, pFalsetto: 0.60, pMix: 0.35, stableFrames: 6, minValidFraction: 0.5,
   fallbackMinHz: 150.0, fallbackMaxHz: 1100.0, fallbackMaxAperiodicity: 0.15, fallbackMinCpp: 2.0,
   fallbackHalfWindowSeconds: 0.035, fallbackMinFrames: 5, fallbackMaxCents: 100.0,
 };
@@ -207,7 +208,12 @@ class RegisterClassifier {
   }
   static hasHarmonics(f) { return f.f0 > 0 && isFinite(f.hrichDb) && isFinite(f.cpp8k); }
   static isValid(f) { return f.f0 > 0 && f.aperiodicity < RC.gateMaxAperiodicity && f.rmsDb > RC.gateMinRmsDbfs && f.f0 >= RC.gateMinF0 && f.f0 <= RC.gateMaxF0 && RegisterClassifier.hasHarmonics(f); }
-  static probabilityFalsetto(f) { return 1 / (1 + Math.exp(-(RC.bias + RC.weightHrich * f.hrichDb + RC.weightCpp * f.cpp8k))); }
+  static hrichEffective(f) {
+    let h = f.hrichDb;
+    if (f.f0 > 0) h -= RC.kOct * Math.max(0, Math.log2(RC.fRefHz / f.f0));
+    return h;
+  }
+  static probabilityFalsetto(f) { return 1 / (1 + Math.exp(-(RC.bias + RC.weightHrich * RegisterClassifier.hrichEffective(f) + RC.weightCpp * f.cpp8k))); }
   static fallbackCandidate(f) {
     if (!(f.f0 >= RC.fallbackMinHz && f.f0 <= RC.fallbackMaxHz && f.aperiodicity < RC.fallbackMaxAperiodicity && f.rmsDb > RC.gateMinRmsDbfs && RegisterClassifier.hasHarmonics(f) && f.cpp8k >= RC.fallbackMinCpp)) return 0;
     return f.f0;
@@ -221,7 +227,7 @@ class RegisterClassifier {
     for (let s = 0; s < mono.length - n; s += this.hop) {
       const f = this.features(mono, s, !keep);
       const p = RegisterClassifier.isValid(f) ? RegisterClassifier.probabilityFalsetto(f) : null;
-      states.push(sm.push(p)); probs.push(p); pitch.push(RegisterClassifier.fallbackCandidate(f));
+      states.push(sm.push(p, f.f0)); probs.push(p); pitch.push(RegisterClassifier.fallbackCandidate(f));
       centers.push((s + n / 2) / this.sampleRate); if (keep) feats.push(f);
       if (onProgress && (++cnt % 200 === 0)) onProgress(s / mono.length);
     }
@@ -251,13 +257,14 @@ function medianFallback(pitch, lo, hi) {
 }
 class Smoother {
   constructor() { this.history = []; this.candidate = REG.none; this.count = 0; this.state = REG.none; }
-  push(p) {
+  push(p, f0) {
     this.history.push(p); if (this.history.length > RC.medianFrames) this.history.shift();
     const vals = this.history.filter(v => v !== null).sort((a, b) => a - b);
     let c = REG.none;
     if (p !== null && vals.length >= RC.minValidFraction * RC.medianFrames) {
       const m = vals.length % 2 ? vals[vals.length >> 1] : (vals[vals.length / 2 - 1] + vals[vals.length / 2]) / 2;
       c = m >= RC.pFalsetto ? REG.falsetto : (m <= RC.pMix ? REG.mix : REG.none);
+      if (c === REG.mix && f0 > 0 && f0 < RC.mixFloorHz) c = REG.none;
     }
     if (c === this.candidate) this.count++; else { this.candidate = c; this.count = 1; }
     if (this.count >= RC.stableFrames) this.state = c;
@@ -329,7 +336,7 @@ class LivePitchStream {
     const n = this.cl.frameLength;
     while (this.nextStart + n < this.total44) {
       const f = this.cl.features(this.pcm44, this.nextStart - this.base44, true);
-      this.states.push(this.sm.push(RegisterClassifier.isValid(f) ? RegisterClassifier.probabilityFalsetto(f) : null));
+      this.states.push(this.sm.push(RegisterClassifier.isValid(f) ? RegisterClassifier.probabilityFalsetto(f) : null, f.f0));
       this.cands.push(RegisterClassifier.fallbackCandidate(f));
       this.nextStart += this.cl.hop;
     }
