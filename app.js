@@ -1,7 +1,8 @@
-/* PitchMeter web trial — UI. Everything runs on this device; nothing is uploaded, no analytics, no external requests. */
+/* PitchMeter web trial — UI (iOS MobileHome parity). Everything runs on this device; nothing is uploaded, no analytics.
+   Network: only this site's own files (app, analysis models). Ads: placeholders only (ads-config.js), no ad requests. */
 (function () {
 'use strict';
-const C = window.PMCore, G = window.PMGauge;
+const C = window.PMCore, G = window.PMGauge, ADS = window.PM_ADS;
 const $ = (id) => document.getElementById(id);
 const MAX_SECONDS = 300, MAX_BYTES = 600 * 1024 * 1024;
 
@@ -20,7 +21,7 @@ document.querySelectorAll('svg[data-glyph]').forEach(s => { s.innerHTML = GLYPHS
 // ---------- tabs (fresh load always starts on 素材分析; panes are hidden, never rebuilt) ----------
 let tab = null;
 const tabs = Array.from(document.querySelectorAll('.tab'));
-function placePill() { const b = tabs.find(t => t.dataset.tab === tab); const pill = $('pill'); pill.style.width = b.offsetWidth + 'px'; pill.style.transform = `translateX(${b.offsetLeft - 5}px)`; }
+function placePill() { const b = tabs.find(t => t.dataset.tab === tab); if (!b) return; const pill = $('pill'); pill.style.width = b.offsetWidth + 'px'; pill.style.transform = `translateX(${b.offsetLeft - 5}px)`; }
 function selectTab(t) {
   if (t === tab && !$('tab-' + t).hidden) { placePill(); return; }
   if (tab === 'live' && t !== 'live') live.stop();
@@ -33,26 +34,18 @@ function selectTab(t) {
 tabs.forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
 window.addEventListener('resize', () => { placePill(); file.resize(); });
 
-// ---------- sheets ----------
-let infoSheet = null;
-function openSheet(title, tpl) { $('sheetTitle').textContent = title; const c = $('sheetContent'); c.innerHTML = ''; c.appendChild($(tpl).content.cloneNode(true)); (infoSheet = infoSheet || modal($('sheet'))).open('sheetClose'); }
-$('sheetClose').onclick = () => { if (infoSheet) infoSheet.close(); else $('sheet').hidden = true; };
-document.querySelectorAll('[data-sheet]').forEach(b => b.addEventListener('click', () => {
-  const k = b.dataset.sheet; openSheet({ support: 'サポート', feedback: 'ご意見・ご要望', license: 'ライセンス' }[k], 't-' + k);
-}));
-$('guideBtn').onclick = () => openSheet('使い方', 't-guide');
-
 function canvasFit(cv, cssW, cssH) { const dpr = Math.min(3, window.devicePixelRatio || 1); const w = Math.max(2, Math.round(cssW * dpr)), h = Math.max(2, Math.round(cssH * dpr)); if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; } return [w, h]; }
 const fmt = (s) => { s = isFinite(s) ? Math.max(0, s || 0) : 0; const m = Math.floor(s / 60), r = Math.floor(s % 60); return m + ':' + String(r).padStart(2, '0'); };
+const fmt2 = (t) => { const s = Math.max(0, Math.floor(isFinite(t) ? t : 0)); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); }; // MobilePlayback.time
 
-// ---------- モーダルシート共通（フォーカス移動・Tab の閉じ込め・Escape で閉じる・閉じたら元の場所へ戻す） ----------
+// ---------- モーダル共通（フォーカス移動・Tab の閉じ込め・Escape で閉じる・閉じたら元の場所へ戻す） ----------
 const modals = new Map();
 function modal(el, onClose) {
   let back = null;
-  const focusables = () => Array.from(el.querySelectorAll('button:not([disabled]),[href],input:not([hidden]),[tabindex]:not([tabindex="-1"])')).filter(x => x.offsetParent !== null);
+  const focusables = () => Array.from(el.querySelectorAll('button:not([disabled]),[href],input:not([hidden]),select,textarea,[tabindex]:not([tabindex="-1"])')).filter(x => x.offsetParent !== null);
   const api = {
-    open(first) { back = document.activeElement; el.hidden = false; requestAnimationFrame(() => { const f = first ? $(first) : focusables()[0]; if (f) f.focus(); }); },
-    close(restore = true) { if (el.hidden) return; el.hidden = true; if (restore && back && back.focus) back.focus(); back = null; },
+    open(first) { back = document.activeElement; el.hidden = false; requestAnimationFrame(() => { const f = first ? $(first) : focusables()[0]; if (f) f.focus({ preventScroll: true }); }); ads.update(); },
+    close(restore = true) { if (el.hidden) return; el.hidden = true; if (restore && back && back.focus) back.focus({ preventScroll: true }); back = null; ads.update(); },
     requestClose() { onClose ? onClose() : api.close(); },
   };
   el.addEventListener('keydown', (e) => {
@@ -63,129 +56,531 @@ function modal(el, onClose) {
   el.addEventListener('click', (e) => { if (e.target === el) api.requestClose(); });
   modals.set(el.id, api); return api;
 }
-document.addEventListener('keydown', (e) => { if (e.key !== 'Escape') return; for (const [id, m] of modals) if (!$(id).hidden) { e.preventDefault(); m.requestClose(); break; } });
+document.addEventListener('keydown', (e) => { if (e.key !== 'Escape') return; for (const [id, m] of Array.from(modals).reverse()) if (!$(id).hidden) { e.preventDefault(); m.requestClose(); break; } });
 
-// ======================= 素材分析 =======================
-const file = (() => {
-  let worker = null, job = 0, media = null, isVideo = false, url = null, frames = null, timeline = null, vertical = false, raf = 0, meterCanvas = null, name = '';
-  const status = (s) => { $('fileStatus').textContent = s; };
-  const progress = (u) => { $('progressWrap').hidden = u === null; if (u !== null) { $('progressBar').style.setProperty('--p', (u * 100).toFixed(0) + '%'); $('progressText').textContent = Math.round(u * 100) + '%'; } };
-  function resetMedia() {
-    cancelAnimationFrame(raf); raf = 0;
-    for (const el of [$('video'), $('audio')]) { try { el.pause(); } catch (e) {} el.removeAttribute('src'); el.load(); }
-    if (url) { URL.revokeObjectURL(url); url = null; }
-    media = null; frames = null; timeline = null;
-    $('stage').hidden = true; $('controls').hidden = true; $('settings').hidden = true; $('reBtn').hidden = true;
-    if (meterCanvas) { meterCanvas.remove(); meterCanvas = null; }
+// ---------- ⓘ 説明（StudioInformationModal / operationDetails） ----------
+const INFO = {
+  '利用回数': '解析は消費なし。月次試用は新しいファイルの書き出し成功時に1回消費します。\n（ウェブ試作版は回数を消費しません。）',
+  'Fullでできること': '最大300秒、自動・手動音域、縦メーター、出力音声の選択が利用できます。購入条件はプラン・購入で確認できます。',
+  '歌声補正': '原音・歌声・保守的補完から解析方法を選びます。変更後は再解析で確認してください。',
+  '音声': '動画に含める音声を選びます。抽出歌声・伴奏は対応する分離結果が必要です。',
+  'メーターの向き': 'メーターの向きを選びます。素材の縦横とプレビュー枠は自動判定します。縦メーターはFullで利用できます。',
+  '開発者アイコンの表示切替': 'メーター内に開発者のアイコンと名前を表示します。無料プランでは常に表示されます。Full・Plusは表示を切り替えられます。',
+  '音域設定': '自動は安定した解析音高から設定します。手動値は自動値とは別に保持し、切替時も残ります。',
+  '全画面': 'メーターの表示を広げる、または元の表示へ戻します。\n表示のみの操作です。解析は開始しません。',
+  '再生・試聴': '選択中の素材・解析音を再生、停止、移動します。\n試聴する音声は画面の選択状態を確認してください。原本は変更しません。',
+};
+const infoM = modal($('infoModal'));
+function showInfo(title, text) { const host = !$('fs').hidden ? $('fs') : document.body; if ($('infoModal').parentNode !== host) host.appendChild($('infoModal')); $('infoTitle').textContent = title; $('infoText').textContent = text; infoM.open('infoClose'); }
+$('infoClose').onclick = () => infoM.close();
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('.info'); if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  if (b.dataset.info) showInfo(b.dataset.info, INFO[b.dataset.info] || ''); else showInfo(b.dataset.infoTitle || '', b.dataset.infoText || '');
+}, true);
+$('fullWhatBtn').onclick = () => showInfo('Fullでできること', INFO['Fullでできること']);
+
+// ---------- 広告枠（ads-config.js の1か所で管理。枠だけ・通信なし。表示条件は iOS と同じ） ----------
+const ads = (() => {
+  const S = (ADS && ADS.slots) || {}, label = (ADS && ADS.label) || '広告';
+  let presenting = false, rewardBusy = false, actionsSinceAd = 0;
+  const covered = () => !$('fs').hidden || !$('plan').hidden || !$('guide').hidden || presenting;
+  function build() {
+    const b = $('adBanner');
+    if (S.banner && S.banner.enabled) { b.innerHTML = `<div class="ad-banner"><span class="ad-badge">${label}</span><span class="ad-ph">広告枠 ${S.banner.width}×${S.banner.height}</span></div>`; Object.assign(b.firstChild.style, { width: S.banner.width + 'px', height: S.banner.height + 'px' }); }
+    const n = $('adNative');
+    if (S.native && S.native.enabled) n.innerHTML = `<div class="ad-native"><span class="ad-attr">${label}</span><div class="ad-row"><i class="ad-icon"></i><div><div class="ad-title">広告枠（ネイティブ広告）</div><div class="ad-body">ここに広告が表示されます。ウェブ版は枠のみで、広告は読み込みません。</div></div></div><div class="ad-media">広告の画像・動画</div><div class="ad-cta">詳しく見る</div></div>`;
   }
-  let lastFile = null;
-  async function choose(f) {
-    if (!f) return;
-    lastFile = f; name = f.name || '素材';
-    if (worker) { worker.terminate(); worker = null; }
-    resetMedia(); $('editCard').hidden = false; $('fileName').textContent = name;
-    const looksVideo = /^video\//.test(f.type) || /\.(mp4|mov|m4v|webm|3gp)$/i.test(f.name || '');
-    const looksAudio = /^audio\//.test(f.type) || /\.(mp3|m4a|wav|aac|caf|aif|aiff|flac|ogg|opus)$/i.test(f.name || '');
-    if (!looksVideo && !looksAudio) { status('この素材には対応していません。動画（mp4 / mov）か音声（mp3 / m4a / wav / aac）を選んでください。'); progress(null); return; }
-    if (f.size > MAX_BYTES) { status('ファイルが大きすぎます（600MBまで）。短く書き出した素材を選んでください。'); progress(null); return; }
-    isVideo = looksVideo; const my = ++job;
-    status('素材を読み込んでいます…（端末の中だけで処理します）'); progress(0);
-    let mono, rate;
-    try {
-      const buf = await f.arrayBuffer(); if (my !== job) return;
-      const decoded = await decode(buf); if (my !== job) return;
-      rate = decoded.sampleRate; const n = Math.min(decoded.length, Math.floor(MAX_SECONDS * rate));
-      mono = new Float32Array(n); const chs = decoded.numberOfChannels;
-      for (let c = 0; c < chs; c++) { const d = decoded.getChannelData(c); for (let i = 0; i < n; i++) mono[i] += d[i] / chs; }
-      if (decoded.length > n) status(`最初の${MAX_SECONDS}秒を解析します…`);
-    } catch (e) {
-      if (my !== job) return;
-      progress(null); status('この素材は読み込めませんでした。音声トラックがない動画や、対応していない形式の可能性があります（対応: mp3 / m4a / wav / aac / mp4 / mov など）。'); return;
-    }
-    url = URL.createObjectURL(f);
-    status('解析中です…'); progress(0.02);
-    const t0 = performance.now();
-    worker = new Worker('worker.js');
-    worker.onmessage = (e) => {
-      const m = e.data; if (my !== job) return;
-      if (m.type === 'progress') progress(0.02 + 0.98 * m.value);
-      else if (m.type === 'result') {
-        worker.terminate(); worker = null;
-        frames = Array.from(m.hz, (hz, i) => ({ hz, register: m.reg[i], fallback: !!m.fb[i] }));
-        const sec = ((performance.now() - t0) / 1000).toFixed(1);
-        progress(null); status(`解析が完了しました（${sec}秒）。再生するとメーターが動きます。`);
-        buildTimeline(); showMedia();
-      } else if (m.type === 'error') { progress(null); status('解析できませんでした：' + m.message); }
-    };
-    worker.onerror = () => { if (my === job) { progress(null); status('解析できませんでした。端末のメモリが足りない可能性があります。短い素材でお試しください。'); } };
-    worker.postMessage({ type: 'analyze', mono, rate, id: my }, [mono.buffer]);
+  function update() {
+    const visible = document.visibilityState === 'visible';
+    $('adBanner').hidden = !(S.banner && S.banner.enabled && visible && !covered());
+    document.body.classList.toggle('has-banner', !$('adBanner').hidden || (S.banner && S.banner.enabled && covered()));
+    $('adNative').hidden = !(S.native && S.native.enabled && !rewardBusy && !presenting);
+    $('adReward').hidden = !(S.reward && S.reward.enabled);
+    $('rewardBtn').disabled = !file.rewardEligible() || rewardBusy;
   }
-  async function decode(buf) {
-    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-    const ctx = new OAC(1, 1, 44100);
-    return await new Promise((res, rej) => { const p = ctx.decodeAudioData(buf, res, rej); if (p && p.then) p.then(res, rej); });
-  }
-  function buildTimeline() {
-    timeline = C.buildStates(frames, vertical);
-    const voiced = frames.filter(f => f.hz > 0).length, fb = frames.filter(f => f.fallback).length;
-    const r = timeline.range;
-    $('rangeText').textContent = `音域（自動）: 最低音 ${C.noteLabel(r.acceptedLow)} 〜 最高音 ${C.noteLabel(r.acceptedHigh)}`;
-    const cnt = { 2: 0, 1: 0 }; frames.forEach(f => { if (f.hz > 0 && f.register) cnt[f.register]++; });
-    $('statsText').textContent = voiced ? `ポインター表示 ${(100 * voiced / frames.length).toFixed(0)}%（うち補完 ${fb}フレーム）・裏声 ${(100 * cnt[2] / voiced).toFixed(0)}% / ミックス ${(100 * cnt[1] / voiced).toFixed(0)}%` : '音の高さが検出できませんでした。';
-  }
-  function showMedia() {
-    media = isVideo ? $('video') : $('audio');
-    media.src = url; media.load();
-    $('stage').hidden = false; $('controls').hidden = false; $('settings').hidden = false; $('reBtn').hidden = false;
-    $('video').hidden = !isVideo;
-    if (!isVideo) { meterCanvas = document.createElement('canvas'); meterCanvas.className = 'meterOnly'; $('stage').insertBefore(meterCanvas, $('overlay')); $('overlay').hidden = true; }
-    else $('overlay').hidden = false;
-    media.onloadedmetadata = () => {
-      const ready = () => { $('seek').max = Math.min(MAX_SECONDS, isFinite(media.duration) ? media.duration : (frames ? frames.length * 0.02 : 0)) || 1; resize(); draw(); updateTime(); };
-      if (media.duration === Infinity) { // MediaRecorder の webm は長さが未記録 → 末尾へシークして長さを確定させる
-        const fix = () => { if (isFinite(media.duration)) { media.removeEventListener('durationchange', fix); media.currentTime = 0; ready(); } };
-        media.addEventListener('durationchange', fix); try { media.currentTime = 1e9; } catch (e) {} setTimeout(() => { media.removeEventListener('durationchange', fix); ready(); }, 1500);
-      } else ready();
-    };
-    media.ontimeupdate = updateTime;
-    media.onplay = () => { setAudioSession('playback'); $('playBtn').textContent = '一時停止'; $('playState').textContent = '再生中'; loop(); };
-    media.onpause = () => { $('playBtn').textContent = '再生'; $('playState').textContent = '停止中'; draw(); };
-    media.onended = media.onpause;
-    media.onerror = () => { status('この素材は再生できませんでした（解析結果は保持しています）。'); };
-    resize(); draw();
-  }
-  function resize() {
-    if (!media || $('stage').hidden) return;
-    const stage = $('stage');
-    let aspect;
-    if (isVideo) { const vw = media.videoWidth || 16, vh = media.videoHeight || 9; aspect = vw / vh; }
-    else aspect = vertical ? 9 / 16 : 1080 / 330;
-    const maxH = isVideo ? (aspect < 1 ? 420 : 300) : (vertical ? 460 : 9999);
-    stage.style.width = `min(100%, ${(maxH * aspect).toFixed(1)}px)`; stage.style.height = 'auto'; stage.style.aspectRatio = String(aspect);
-    stage.style.background = isVideo ? '#000' : 'rgb(23,23,28)';
-    draw();
-  }
-  function stateAt(t) { const s = timeline.states; return s[Math.min(s.length - 1, Math.max(0, Math.round(t * 30)))]; }
-  function draw() {
-    if (!timeline || !media) return;
-    const cv = isVideo ? $('overlay') : meterCanvas; if (!cv) return;
-    const [w, h] = canvasFit(cv, cv.clientWidth || 1, cv.clientHeight || 1);
-    G.render(cv.getContext('2d'), w, h, stateAt(media.currentTime || 0), timeline.range, vertical);
-  }
-  function loop() { cancelAnimationFrame(raf); const step = () => { draw(); if (media && media.currentTime >= MAX_SECONDS) media.pause(); if (media && !media.paused) raf = requestAnimationFrame(step); }; raf = requestAnimationFrame(step); }
-  function updateTime() { if (!media) return; const d = Math.min(MAX_SECONDS, media.duration || 0); $('seek').value = media.currentTime || 0; $('timeText').textContent = `${fmt(media.currentTime)} / ${fmt(d)}`; }
-  $('pickBtn').onclick = () => $('fileInput').click(); // iOS は標準メニュー（写真ライブラリ / ビデオを撮る / ファイルを選択）を直接表示
-  for (const id of ['fileInput']) $(id).addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; choose(f); });
-  $('playBtn').onclick = () => { if (!media) return; setAudioSession('playback'); if (media.paused) { if (media.currentTime >= Math.min(MAX_SECONDS, media.duration || Infinity) - 0.05) media.currentTime = 0; media.play().catch(() => status('再生を開始できませんでした。もう一度押してください。')); } else media.pause(); };
-  $('stopBtn').onclick = () => { if (!media) return; media.pause(); media.currentTime = 0; updateTime(); draw(); };
-  $('seek').oninput = () => { if (!media) return; media.currentTime = +$('seek').value; draw(); updateTime(); };
-  $('cancelBtn').onclick = () => { job++; if (worker) { worker.terminate(); worker = null; } progress(null); status('解析を中止しました。'); };
-  $('reBtn').onclick = () => { if (lastFile) choose(lastFile); };
-  for (const b of [$('orientH'), $('orientV')]) b.onclick = () => { vertical = b.dataset.v === '1'; $('orientH').classList.toggle('on', !vertical); $('orientV').classList.toggle('on', vertical); if (frames) buildTimeline(); resize(); };
-  document.addEventListener('visibilitychange', () => { if (document.hidden && media) media.pause(); });
-  return { resize, choose };
+  $('rewardBtn').onclick = () => { const m = $('rewardMsg'); m.hidden = false; m.textContent = 'ウェブ版は広告の枠だけです（広告は表示しません）。Fullの機能はそのまま使えます。'; };
+  const inter = modal($('adInterstitial'), () => closeInter());
+  function closeInter() { presenting = false; inter.close(); update(); }
+  $('adInterClose').onclick = closeInter;
+  return {
+    build, update, noteAction() { actionsSinceAd++; },
+    // presentAtExportCompletion: 再生中は出さない・前回から minActions 回以上の操作があったときだけ
+    atExportCompletion(playing) {
+      const s = S.interstitial; if (!s || !s.enabled || playing || presenting || actionsSinceAd < (s.minActions || 2)) return false;
+      actionsSinceAd = 0; presenting = true; inter.open('adInterClose'); update(); return true;
+    },
+    get presenting() { return presenting; },
+  };
+})();
+document.addEventListener('visibilitychange', () => ads.update());
+
+// ---------- プラン・購入（PlanGuideScreen：表示のみ、購入なし） ----------
+const plan = (() => {
+  const m = modal($('plan'), () => close());
+  function open() { m.open('planClose'); }
+  function close() { m.close(); }
+  $('planClose').onclick = close; $('planContinue').onclick = close; $('planBtn').onclick = open;
+  document.querySelectorAll('[data-review]').forEach(b => b.onclick = () => showInfo('プランの確認', `${b.dataset.review}：ウェブ試作版では購入できません（表示のみ）。購入はiPhoneアプリの「プラン・購入」から行えます。`));
+  return { open, close };
 })();
 
+// ---------- 使い方（LocalUsageGuide） ----------
+const guideM = modal($('guide'));
+$('guideBtn').onclick = () => guideM.open('guideClose');
+$('guideClose').onclick = () => guideM.close();
+
+// ---------- シート（サポート・ライセンス） ----------
+const sheetM = modal($('sheet'));
+function openSheet(title, tpl, init) { $('sheetTitle').textContent = title; const c = $('sheetContent'); c.innerHTML = ''; c.appendChild($(tpl).content.cloneNode(true)); sheetM.open('sheetClose'); if (init) init(); }
+$('sheetClose').onclick = () => sheetM.close();
+const LEGAL = { terms: 'https://www.apple.com/legal/internet-services/itunes/dev/stdeula/', privacy: 'https://pitch-meter-support.kenjouta0227.workers.dev/privacy' };
+document.querySelectorAll('[data-legal]').forEach(b => b.onclick = () => { window.open(LEGAL[b.dataset.legal], '_blank', 'noopener,noreferrer'); });
+// FeedbackPanel: 入力はこの端末（localStorage）にだけ保存。送信はしない（メールアプリで本人が送る）。
+const FB_KEY = 'pm.feedback.v1', SUPPORT = 'kenjouta0227@gmail.com';
+$('rowSupport').onclick = () => openSheet('サポート', 't-support', () => {
+  let d = { improvement: '', feature: '' }; try { d = Object.assign(d, JSON.parse(localStorage.getItem(FB_KEY) || '{}')); } catch (e) {}
+  const msg = (s) => { $('fbMsg').textContent = s; };
+  const body = () => `ピッチメーターへのお問い合わせ\n\n【問い合わせ内容・改善してほしい点】\n${d.improvement}\n\n【追加してほしい機能】\n${d.feature}`;
+  $('fbImprove').value = d.improvement; $('fbFeature').value = d.feature;
+  const persist = () => { try { localStorage.setItem(FB_KEY, JSON.stringify(d)); msg('入力を端末内に保存しました。まだ送信していません。'); } catch (e) { msg('保存できませんでした。本文をコピーして残してください。'); } };
+  $('fbImprove').oninput = () => { d.improvement = $('fbImprove').value; persist(); };
+  $('fbFeature').oninput = () => { d.feature = $('fbFeature').value; persist(); };
+  $('fbMail').onclick = () => {
+    const url = 'mailto:' + SUPPORT + '?subject=' + encodeURIComponent('ピッチメーター お問い合わせ') + '&body=' + encodeURIComponent(body());
+    if (url.length > 16000) { msg('本文が長いためコピーしてメールへ貼り付けてください。'); return; }
+    try { window.location.href = url; msg('メール画面で内容を確認して送信してください。入力は保持しています。'); } catch (e) { msg('メールを開けませんでした。入力は保持されています。宛先・本文をコピーできます。'); }
+  };
+  $('fbCopy').onclick = async () => { try { await navigator.clipboard.writeText('宛先：' + SUPPORT + '\n\n' + body()); msg('コピーしました。送信していません。'); } catch (e) { msg('コピーできませんでした。'); } };
+  $('fbClear').onclick = () => { d = { improvement: '', feature: '' }; $('fbImprove').value = ''; $('fbFeature').value = ''; persist(); };
+});
+// LicenseReader: 6000文字ごとにページ分け（iOS LicensePages.split と同じ）
+let licPages = null;
+$('rowLicense').onclick = () => openSheet('ライセンス・第三者ソフトウェア', 't-license', async () => {
+  try {
+    if (!licPages) { const r = await fetch('ThirdPartyNotices.txt'); if (!r.ok) throw new Error(); const t = await r.text(); const cps = Array.from(t); licPages = []; for (let i = 0; i < cps.length; i += 6000) licPages.push(cps.slice(i, i + 6000).join('')); if (!licPages.length) licPages = ['']; }
+  } catch (e) { $('licHint').textContent = 'ライセンスを読み込めませんでした'; return; }
+  let page = 0; const sel = $('licPage');
+  sel.innerHTML = licPages.map((_, i) => `<option value="${i}">${i + 1} / ${licPages.length}</option>`).join('');
+  $('licHint').textContent = '全文を順番に分けて表示します。文字の選択・コピーもできます。'; $('licNav').hidden = false;
+  const show = () => { $('licText').textContent = licPages[page]; $('licText').scrollTop = 0; sel.value = String(page); $('licPageVal').textContent = `${page + 1} / ${licPages.length}`; $('licPrev').disabled = page === 0; $('licNext').disabled = page + 1 === licPages.length; };
+  $('licPrev').onclick = () => { if (page > 0) { page--; show(); } }; $('licNext').onclick = () => { if (page + 1 < licPages.length) { page++; show(); } };
+  sel.onchange = () => { page = +sel.value; show(); };
+  show();
+});
+
+// ---------- select の表示値（iOS selectField と同じ見た目） ----------
+function bindSelect(sel, val, on) { const upd = () => { val.textContent = sel.options[sel.selectedIndex].text; }; sel.addEventListener('change', () => { upd(); on && on(sel.value); }); upd(); }
+
+// ---------- 開発者アイコン ----------
+const brandImg = new Image(); brandImg.onload = () => { G.setBrand(brandImg); file.redraw(); }; brandImg.src = 'GaugeBrand.jpeg';
+
+// ======================= 素材分析（MobileHome.fileTab） =======================
+const file = (() => {
+  // ---- state ----
+  let srcFile = null, isVideo = false, url = null, media = null, L = null, R = null, duration = 0;
+  let worker = null, job = 0, task = null; // task: 'analysis' | 'video' | null
+  let result = null; // { frames, stem:[L,R]|null, key }
+  let timeline = null, analysisFrames = null;
+  let analysisMode = 'assisted', outputAudio = 'original', vertical = false, branding = true;
+  let manualRangeEnabled = false, manualRange = null, rangeLow = 52, rangeHigh = 74;
+  let placement = { x: null, y: null, scale: 1, angle: 0 };
+  let sourceSize = { w: 640, h: 360 }, ready = false, fullscreen = false;
+  let output = null; const completed = [];
+  let raf = 0;
+  const status = (s) => { $('fileStatus').textContent = s; };
+  const progress = (u) => { $('progressWrap').hidden = u === null; if (u !== null) { $('progressBar').style.setProperty('--p', (u * 100).toFixed(0) + '%'); $('progressText').textContent = Math.round(u * 100) + '%'; } };
+  const appearance = () => ({ maximumSeconds: MAX_SECONDS, vertical, branding, placement });
+  const manualOf = (low, high) => { const r = { low, high, split1: low + (high - low) / 3, split2: low + 2 * (high - low) / 3, acceptedLow: 440 * Math.pow(2, (low - 69) / 12), acceptedHigh: 440 * Math.pow(2, (high - 69) / 12) }; return (isFinite(low) && isFinite(high) && 35 <= low && low < high && high <= 96) ? r : null; };
+  const activeRange = () => (manualRangeEnabled ? manualRange : null);
+  const displayedRange = () => activeRange() || C.makeRange(analysisFrames || []);
+  const playing = () => !!(media && !media.paused && !media.ended);
+  function setTask(t) {
+    task = t;
+    const busy = !!t;
+    for (const id of ['analysisSel', 'audioSel', 'orientH', 'orientV', 'brandToggle', 'rangeAuto', 'rangeManual', 'midiLow', 'midiHigh']) $(id).disabled = busy;
+    $('settings').classList.toggle('disabled', busy); $('rangeCard').classList.toggle('disabled', busy);
+    for (const id of ['reBtn', 'exVideo', 'exAlpha', 'exAudio', 'pickBtn', 'sampleBtn']) $(id).disabled = busy;
+    $('editor').classList.toggle('off', busy); // playback.editingEnabled = (operationKind == "idle")
+    if (busy) deselect();
+    renderMidi(); ads.update();
+  }
+
+  // ---- 素材を選ぶ（startMovie(url)） ----
+  $('pickBtn').onclick = () => $('fileInput').click(); // iOS Safari: 写真ライブラリ / ビデオを撮る / ファイルを選択
+  $('fileInput').addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) choose(f); });
+  async function choose(f) {
+    if (task) return;
+    const looksVideo = /^video\//.test(f.type) || /\.(mp4|mov|m4v|webm|3gp)$/i.test(f.name || '');
+    const looksAudio = /^audio\//.test(f.type) || /\.(mp3|m4a|wav|aac|caf|aif|aiff|flac|ogg|opus)$/i.test(f.name || '');
+    $('editCard').hidden = false; $('fileName').textContent = f.name || '素材';
+    if (!looksVideo && !looksAudio) { status('この素材には対応していません。動画（mp4 / mov）か音声（mp3 / m4a / wav / aac）を選んでください。'); return; }
+    if (f.size > MAX_BYTES) { status('ファイルが大きすぎます（600MBまで）。短く書き出した素材を選んでください。'); return; }
+    clearPlayback(); output = null; $('shareBtn').hidden = true; $('outDesc').hidden = true;
+    srcFile = f; isVideo = looksVideo; L = R = null; result = null; analysisFrames = null;
+    $('rangeCard').hidden = true; $('exports').hidden = true;
+    startAnalysis();
+  }
+  $('reBtn').onclick = () => { if (srcFile && !task) { clearPlayback(); output = null; $('shareBtn').hidden = true; $('outDesc').hidden = true; result = null; analysisFrames = null; $('rangeCard').hidden = true; $('exports').hidden = true; startAnalysis(); } };
+  async function decodeFile() {
+    if (L) return;
+    const buf = await srcFile.arrayBuffer();
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const ctx = new OAC(2, 1, 44100);
+    const d = await new Promise((res, rej) => { const p = ctx.decodeAudioData(buf, res, rej); if (p && p.then) p.then(res, rej); });
+    const n = Math.min(d.length, Math.floor(MAX_SECONDS * 44100));
+    L = d.getChannelData(0).slice(0, n); R = (d.numberOfChannels > 1 ? d.getChannelData(1) : d.getChannelData(0)).slice(0, n);
+  }
+  const keyOf = (a, o) => a + '|' + o;
+  let pendingReject = null;
+  function runProcess(analysis, audio, onProgress) {
+    return new Promise((resolve, reject) => {
+      const my = ++job; pendingReject = reject;
+      if (!worker) worker = new Worker('worker.js');
+      worker.onmessage = (e) => {
+        const m = e.data; if (my !== job) return;
+        if (m.type === 'progress') onProgress(m.value, m.label);
+        else if (m.type === 'result') resolve({ frames: Array.from(m.hz, (hz, i) => ({ hz, register: m.reg[i], fallback: !!m.fb[i] })), stem: m.stemL ? [m.stemL, m.stemR] : null, key: keyOf(analysis, audio) });
+        else if (m.type === 'error') reject(new Error(m.message));
+      };
+      worker.onerror = (ev) => { if (my === job) reject(new Error('worker')); };
+      worker.postMessage({ type: 'process', id: my, L, R, analysis, audio });
+    });
+  }
+  function cancelTask() { job++; if (worker) { worker.terminate(); worker = null; } if (exporter.active()) exporter.cancel(); if (pendingReject) { const r = pendingReject; pendingReject = null; r(new Error('cancelled')); } }
+  $('cancelBtn').onclick = () => { if (!task) return; cancelTask(); setTask(null); progress(null); status('中止しました。試用回数は消費していません。'); };
+  async function startAnalysis() {
+    ads.noteAction();
+    setTask('analysis'); status('解析しています（試用回数は消費しません）…'); progress(0);
+    try {
+      await decodeFile();
+      result = await runProcess(analysisMode, outputAudio, (v) => progress(v));
+      analysisFrames = result.frames;
+      await loadPlayback();
+      rebuildTimeline();
+      $('rangeCard').hidden = false; $('exports').hidden = false; renderRange();
+      progress(null); setTask(null);
+      status('解析が完了しました。素材とメーターを再生・全画面で確認できます。保存は下の書き出しボタンを使ってください。');
+    } catch (e) {
+      if (!task) return; // cancelled
+      progress(null); setTask(null);
+      status(/decode|EncodingError|Unable|unsupported/i.test(String(e && (e.name + e.message))) || !L ? 'この素材は読み込めませんでした。音声トラックがない動画や、対応していない形式の可能性があります（対応: mp3 / m4a / wav / aac / mp4 / mov など）。' : '書き出し・解析を完了できませんでした。完成ファイル一覧と試用残数を確認してください。');
+    }
+  }
+
+  // ---- 再生（MobilePlayback / PlaybackStage） ----
+  function clearPlayback() {
+    exitFullscreen(); cancelAnimationFrame(raf); raf = 0; ready = false;
+    for (const el of [$('video')]) { try { el.pause(); } catch (e) {} el.removeAttribute('src'); el.load(); }
+    if (media && media !== $('video')) { try { media.pause(); } catch (e) {} media.removeAttribute('src'); }
+    media = null; if (url) { URL.revokeObjectURL(url); url = null; }
+    timeline = null; placement = { x: null, y: null, scale: 1, angle: 0 }; sourceSize = { w: 640, h: 360 };
+    $('stageBox').hidden = true; $('controls').hidden = true; $('placeHint').hidden = true; deselect();
+  }
+  function loadPlayback() {
+    return new Promise((resolve, reject) => {
+      url = URL.createObjectURL(srcFile);
+      media = isVideo ? $('video') : new Audio();
+      media.preload = 'auto'; if (!isVideo) media.setAttribute('playsinline', '');
+      $('video').hidden = !isVideo;
+      let done = false;
+      const fin = () => {
+        if (done) return; done = true;
+        if (isVideo && media.videoWidth > 0) sourceSize = { w: media.videoWidth, h: media.videoHeight };
+        const d = isFinite(media.duration) && media.duration > 0 ? media.duration : (analysisFrames.length * 0.02);
+        duration = Math.min(d, MAX_SECONDS);
+        $('seek').max = $('fsSeek').max = String(Math.max(0.01, duration));
+        ready = true; $('stageBox').hidden = false; $('controls').hidden = false; $('placeHint').hidden = false;
+        resize(); updateTime(); resolve();
+      };
+      media.onloadedmetadata = () => {
+        if (media.duration === Infinity) { // MediaRecorder の webm は長さ未記録 → 末尾へシークして確定
+          const fix = () => { if (isFinite(media.duration)) { media.removeEventListener('durationchange', fix); media.currentTime = 0; fin(); } };
+          media.addEventListener('durationchange', fix); try { media.currentTime = 1e9; } catch (e) {} setTimeout(() => { media.removeEventListener('durationchange', fix); fin(); }, 1500);
+        } else fin();
+      };
+      media.onerror = () => { if (!done) { done = true; status('素材の再生を準備できませんでした。ファイルの形式と保存場所を確認してください。'); reject(new Error('play')); } else status('素材の再生に失敗しました。別の対応素材を選んでください。'); };
+      media.ontimeupdate = () => { if (media.currentTime >= duration - 0.01 && !media.paused) { media.pause(); } updateTime(); };
+      media.onplay = () => { setAudioSession('playback'); syncPlayUI(); loop(); ads.update(); };
+      media.onpause = () => { syncPlayUI(); draw(); ads.update(); };
+      media.onended = media.onpause;
+      media.src = url; media.load();
+    });
+  }
+  function syncPlayUI() { const p = playing(); $('playBtn').textContent = p ? '一時停止' : '再生'; $('playState').textContent = p ? '再生中' : '停止中'; $('fsPlay').textContent = p ? 'Ⅱ 一時停止' : '▶ 再生'; }
+  function rebuildTimeline() { if (!analysisFrames) return; timeline = C.buildStates(analysisFrames, vertical, activeRange()); draw(); }
+  function stateAt(t) { const s = timeline.states; return s[Math.min(s.length - 1, Math.max(0, Math.round(t * 30)))]; }
+  function resize() {
+    if (!ready) return;
+    const host = fullscreen ? $('fsStage') : $('stageBox');
+    if (!fullscreen) host.style.height = (sourceSize.h > sourceSize.w ? 420 : 220) + 'px';
+    const bw = host.clientWidth, bh = host.clientHeight; if (!bw || !bh) return;
+    const fit = Math.min(bw / sourceSize.w, bh / sourceSize.h), fw = sourceSize.w * fit, fh = sourceSize.h * fit;
+    const s = $('stageFit'); s.style.width = fw + 'px'; s.style.height = fh + 'px';
+    draw(); layoutEditor();
+  }
+  function draw() {
+    if (!timeline || !ready) return;
+    const cv = $('overlay'), s = $('stageFit');
+    const [w, h] = canvasFit(cv, s.clientWidth || 1, s.clientHeight || 1);
+    G.render(cv.getContext('2d'), w, h, stateAt(media ? media.currentTime || 0 : 0), timeline.range, appearance());
+  }
+  function loop() { cancelAnimationFrame(raf); const step = () => { draw(); if (media && !media.paused) { updateTime(); raf = requestAnimationFrame(step); } }; raf = requestAnimationFrame(step); }
+  function updateTime() {
+    if (!media) return; const t = Math.min(duration, media.currentTime || 0), s = `${fmt2(t)} / ${fmt2(duration)}`;
+    $('seek').value = t; $('fsSeek').value = t; $('timeText').textContent = s; $('fsTime').textContent = s;
+  }
+  function toggle() { if (!ready || !media) return; setAudioSession('playback'); if (media.paused) { if (media.currentTime >= duration - 0.05) media.currentTime = 0; media.play().catch(() => status('再生を開始できませんでした。もう一度押してください。')); } else media.pause(); }
+  function stop() { if (!media) return; media.pause(); media.currentTime = 0; updateTime(); draw(); }
+  function seek(v) { if (!ready || !media) return; media.currentTime = Math.min(duration, Math.max(0, +v)); updateTime(); draw(); }
+  $('playBtn').onclick = toggle; $('stopBtn').onclick = stop; $('fsPlay').onclick = toggle; $('fsStop').onclick = stop;
+  $('seek').oninput = () => seek($('seek').value); $('fsSeek').oninput = () => seek($('fsSeek').value);
+  document.addEventListener('visibilitychange', () => { if (document.hidden && media) media.pause(); });
+
+  // ---- 全画面（FullscreenPlayback）: 同じ video 要素を移すだけ（再読み込み・シークなし） ----
+  const fsEl = $('fs');
+  function enterFullscreen() {
+    if (!ready) return; fullscreen = true; deselect();
+    fsEl.classList.toggle('portrait', sourceSize.h > sourceSize.w);
+    fsEl.hidden = false; $('fsStage').appendChild($('stageFit')); document.body.classList.add('fs-open');
+    const req = fsEl.requestFullscreen || fsEl.webkitRequestFullscreen; // iPhone Safari は要素の全画面に非対応 → 画面いっぱいの表示で代替
+    if (req && (document.fullscreenEnabled || document.webkitFullscreenEnabled)) { try { const p = req.call(fsEl); if (p && p.catch) p.catch(() => {}); } catch (e) {} }
+    requestAnimationFrame(() => { resize(); $('fsClose').focus({ preventScroll: true }); }); ads.update();
+  }
+  function exitFullscreen() {
+    if (!fullscreen) return; fullscreen = false; deselect();
+    const fe = document.fullscreenElement || document.webkitFullscreenElement;
+    if (fe) { const ex = document.exitFullscreen || document.webkitExitFullscreen; try { const p = ex.call(document); if (p && p.catch) p.catch(() => {}); } catch (e) {} }
+    $('stageBox').appendChild($('stageFit')); fsEl.hidden = true; document.body.classList.remove('fs-open');
+    requestAnimationFrame(resize); ads.update(); $('fsBtn').focus({ preventScroll: true });
+  }
+  $('fsBtn').onclick = enterFullscreen; $('fsClose').onclick = exitFullscreen;
+  for (const ev of ['fullscreenchange', 'webkitfullscreenchange']) document.addEventListener(ev, () => { if (!(document.fullscreenElement || document.webkitFullscreenElement) && fullscreen) exitFullscreen(); else resize(); });
+  fsEl.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); exitFullscreen(); } });
+
+  // ---- メーターの配置（GaugePlacementEditor） ----
+  const ed = $('editor'), hit = $('meterHit');
+  let selected = false, snapX = false, snapY = false, rotSnap = null, rotating = false;
+  const norm = (a) => isFinite(a) ? Math.atan2(Math.sin(a), Math.cos(a)) : 0;
+  function snapAngle(raw) { // MeterRotationSnap.update
+    const a = norm(raw), engage = 3 * Math.PI / 180, release = 6 * Math.PI / 180;
+    if (rotSnap !== null && Math.abs(norm(a - rotSnap)) <= release) return rotSnap;
+    rotSnap = null; const nearest = Math.round(a / (Math.PI / 2)) * (Math.PI / 2);
+    if (Math.abs(norm(a - nearest)) <= engage) { rotSnap = norm(nearest); return rotSnap; }
+    return a;
+  }
+  const degText = (a) => { const d = Math.round(norm(a) * 180 / Math.PI); return (d === 0 ? 0 : d) + '°'; };
+  function geom() { const s = $('stageFit'), w = s.clientWidth, h = s.clientHeight, b = G.bounds(w, h, appearance()), c = G.center(placement, w, h, b), k = G.safeScale(placement); return { w, h, c, bw: b.w * k, bh: b.h * k }; }
+  function corner(g, dx, dy) { const a = placement.angle; return { x: g.c.x + dx * Math.cos(a) - dy * Math.sin(a), y: g.c.y + dx * Math.sin(a) + dy * Math.cos(a) }; }
+  function layoutEditor() {
+    if (!ready) return; const g = geom(), a = placement.angle;
+    const aw = Math.abs(g.bw * Math.cos(a)) + Math.abs(g.bh * Math.sin(a)), ah = Math.abs(g.bw * Math.sin(a)) + Math.abs(g.bh * Math.cos(a));
+    Object.assign(hit.style, { left: (g.c.x - aw / 2) + 'px', top: (g.c.y - ah / 2) + 'px', width: aw + 'px', height: ah + 'px' });
+    const sb = $('selBox'); sb.hidden = !selected;
+    Object.assign(sb.style, { left: (g.c.x - g.bw / 2) + 'px', top: (g.c.y - g.bh / 2) + 'px', width: g.bw + 'px', height: g.bh + 'px', transform: `rotate(${a}rad)` });
+    const r = corner(g, g.bw / 2, -g.bh / 2), s = corner(g, g.bw / 2, g.bh / 2);
+    $('rotHandle').hidden = $('scaleHandle').hidden = !selected;
+    Object.assign($('rotHandle').style, { left: (r.x - 22) + 'px', top: (r.y - 22) + 'px' }); Object.assign($('scaleHandle').style, { left: (s.x - 22) + 'px', top: (s.y - 22) + 'px' });
+    $('resetPlace').hidden = !selected; $('resetPlace').classList.toggle('ghost', rotating);
+    const db = $('degBadge'); db.hidden = !rotating; db.textContent = degText(a); db.classList.toggle('snapped', rotSnap !== null);
+    Object.assign(db.style, { left: Math.min(Math.max(g.c.x, 38), Math.max(38, g.w - 38)) + 'px', top: Math.max(18, g.c.y - ah / 2 - 22) + 'px' });
+    $('guideV').classList.toggle('on', snapX); $('guideH').classList.toggle('on', snapY);
+  }
+  function changed() { draw(); layoutEditor(); }
+  function select() { if (task) return; selected = true; layoutEditor(); }
+  function deselect() { selected = false; rotating = false; snapX = snapY = false; if (ready) layoutEditor(); }
+  ed.addEventListener('pointerdown', (e) => { if (e.target === ed) deselect(); });
+  // 1本指: 移動（中央スナップ 7pt / 解除 14pt）、2本指: 拡大縮小＋回転
+  const ptrs = new Map(); let drag = null, pinch = null;
+  const local = (e) => { const r = $('stageFit').getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  hit.addEventListener('pointerdown', (e) => {
+    if (task) return; e.preventDefault(); hit.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, local(e)); select();
+    if (ptrs.size === 1) { drag = { start: local(e), center: geom().c }; pinch = null; }
+    else if (ptrs.size === 2) { const [p, q] = Array.from(ptrs.values()); pinch = { d0: Math.max(1, Math.hypot(q.x - p.x, q.y - p.y)), a0: Math.atan2(q.y - p.y, q.x - p.x), scale: G.safeScale(placement), angle: placement.angle }; drag = null; rotSnap = null; }
+  });
+  hit.addEventListener('pointermove', (e) => {
+    if (!ptrs.has(e.pointerId)) return; ptrs.set(e.pointerId, local(e));
+    if (pinch && ptrs.size >= 2) {
+      const [p, q] = Array.from(ptrs.values()), d = Math.hypot(q.x - p.x, q.y - p.y), a = Math.atan2(q.y - p.y, q.x - p.x);
+      placement.scale = Math.min(2.5, Math.max(0.2, pinch.scale * d / pinch.d0)); rotating = true; placement.angle = snapAngle(pinch.angle + a - pinch.a0); changed();
+    } else if (drag) {
+      const g = geom(), cur = local(e), tx = drag.center.x + cur.x - drag.start.x, ty = drag.center.y + cur.y - drag.start.y;
+      const ax = Math.abs(tx - g.w / 2) <= (snapX ? 14 : 7), ay = Math.abs(ty - g.h / 2) <= (snapY ? 14 : 7); snapX = ax; snapY = ay;
+      placement.x = Math.min(1, Math.max(0, (ax ? g.w / 2 : tx) / g.w)); placement.y = Math.min(1, Math.max(0, (ay ? g.h / 2 : ty) / g.h)); changed();
+    }
+  });
+  const up = (e) => { ptrs.delete(e.pointerId); if (ptrs.size < 2) { pinch = null; if (rotating) { rotating = false; rotSnap = null; } } if (ptrs.size === 0) { drag = null; snapX = snapY = false; } else if (ptrs.size === 1 && !drag) { const p = Array.from(ptrs.values())[0]; drag = { start: p, center: geom().c }; } layoutEditor(); };
+  hit.addEventListener('pointerup', up); hit.addEventListener('pointercancel', up);
+  function handleDrag(el, onMove) {
+    let st = null;
+    el.addEventListener('pointerdown', (e) => { if (task) return; e.preventDefault(); e.stopPropagation(); el.setPointerCapture(e.pointerId); st = { p: local(e), placement: Object.assign({}, placement), c: geom().c }; rotSnap = null; });
+    el.addEventListener('pointermove', (e) => { if (!st) return; onMove(st, local(e)); changed(); });
+    const end = () => { st = null; rotating = false; rotSnap = null; layoutEditor(); };
+    el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
+  }
+  handleDrag($('rotHandle'), (st, p) => { rotating = true; const a = Math.atan2(st.p.y - st.c.y, st.p.x - st.c.x), b = Math.atan2(p.y - st.c.y, p.x - st.c.x); placement.angle = snapAngle(st.placement.angle + b - a); });
+  handleDrag($('scaleHandle'), (st, p) => { const d0 = Math.max(1, Math.hypot(st.p.x - st.c.x, st.p.y - st.c.y)), d1 = Math.hypot(p.x - st.c.x, p.y - st.c.y); placement.scale = Math.min(2.5, Math.max(0.2, G.safeScale(st.placement) * d1 / d0)); });
+  $('resetPlace').onclick = (e) => { e.stopPropagation(); placement = { x: null, y: null, scale: 1, angle: 0 }; rotSnap = null; rotating = false; changed(); };
+
+  // ---- settingsCard ----
+  bindSelect($('analysisSel'), $('analysisVal'), (v) => { analysisMode = v; });
+  bindSelect($('audioSel'), $('audioVal'), (v) => { outputAudio = v; });
+  for (const b of [$('orientH'), $('orientV')]) b.onclick = () => { vertical = b.dataset.v === '1'; $('orientH').classList.toggle('on', !vertical); $('orientV').classList.toggle('on', vertical); rebuildTimeline(); layoutEditor(); };
+  $('brandToggle').onchange = () => { branding = $('brandToggle').checked; draw(); layoutEditor(); };
+
+  // ---- rangeCard（自動／手動 + MIDIIntervalControl） ----
+  const midiOf = (low, high) => { const l = isFinite(low) ? Math.round(Math.min(95, Math.max(35, low))) : 52; const h = isFinite(high) ? Math.round(Math.min(96, Math.max(l + 1, high))) : Math.max(l + 1, 74); return { low: l, high: h }; };
+  function renderRange() {
+    const r = displayedRange(), on = manualRangeEnabled;
+    $('rangeAuto').classList.toggle('on', !on); $('rangeManual').classList.toggle('on', on);
+    $('rangeLowText').innerHTML = ''; $('rangeHighText').innerHTML = '';
+    $('rangeLowText').append(`最低音 ${C.noteLabel(440 * Math.pow(2, (r.low - 69) / 12))}`, document.createElement('br'), `MIDI ${r.low.toFixed(1)}`);
+    $('rangeHighText').append(`最高音 ${C.noteLabel(440 * Math.pow(2, (r.high - 69) / 12))}`, document.createElement('br'), `MIDI ${r.high.toFixed(1)}`);
+    $('rangeSpan').textContent = `レンジ ${r.low.toFixed(1)}〜${r.high.toFixed(1)} MIDI`;
+    renderMidi();
+  }
+  function renderMidi() {
+    if ($('rangeCard').hidden) return;
+    const iv = midiOf(displayedRange().low, displayedRange().high), editable = manualRangeEnabled && !task;
+    $('midiCtl').classList.toggle('off', !editable); $('midiLow').disabled = $('midiHigh').disabled = !editable;
+    if (document.activeElement !== $('midiLow')) $('midiLow').value = iv.low; if (document.activeElement !== $('midiHigh')) $('midiHigh').value = iv.high;
+    const tw = $('midiTrack').clientWidth, span = Math.max(1, tw - 20), lx = 10 + span * (iv.low - 35) / 61, hx = 10 + span * (iv.high - 35) / 61;
+    Object.assign($('midiBand').style, { left: lx + 'px', width: Math.max(1, hx - lx) + 'px' });
+    $('midiLowKnob').style.left = (lx - 10) + 'px'; $('midiHighKnob').style.left = (hx - 10) + 'px';
+    return { iv, lx, hx, span };
+  }
+  function setManual(low, high) { const r = manualOf(low, high); if (!r) return; manualRange = r; rangeLow = low; rangeHigh = high; renderRange(); rebuildTimeline(); }
+  $('rangeAuto').onclick = () => { manualRangeEnabled = false; renderRange(); rebuildTimeline(); };
+  $('rangeManual').onclick = () => { if (!manualRange) manualRange = manualOf(rangeLow, rangeHigh); manualRangeEnabled = true; renderRange(); rebuildTimeline(); };
+  const ivSetLow = (iv, v) => midiOf(Math.min(iv.high - 1, Math.max(35, v)), iv.high);
+  const ivSetHigh = (iv, v) => midiOf(iv.low, Math.max(iv.low + 1, Math.min(96, v)));
+  const ivShift = (iv, d) => { d = Math.min(96 - iv.high, Math.max(35 - iv.low, d)); return midiOf(iv.low + d, iv.high + d); };
+  for (const [id, lower] of [['midiLow', true], ['midiHigh', false]]) {
+    $(id).addEventListener('input', () => { if (!manualRangeEnabled || task) return; const n = parseInt($(id).value, 10); if (!isFinite(n)) return; const iv = midiOf(displayedRange().low, displayedRange().high), v = lower ? ivSetLow(iv, n) : ivSetHigh(iv, n); setManual(v.low, v.high); });
+    $(id).addEventListener('blur', renderMidi);
+  }
+  { let st = null; const tr = $('midiTrack');
+    tr.addEventListener('pointerdown', (e) => { if (!manualRangeEnabled || task) return; e.preventDefault(); tr.setPointerCapture(e.pointerId); document.activeElement && document.activeElement.blur && document.activeElement.blur();
+      const g = renderMidi(), x = e.clientX - tr.getBoundingClientRect().left;
+      st = { iv: g.iv, x0: e.clientX, span: g.span, part: (x > g.lx + 10 && x < g.hx - 10) ? 'range' : (Math.abs(x - g.lx) <= Math.abs(x - g.hx) ? 'low' : 'high') }; });
+    tr.addEventListener('pointermove', (e) => { if (!st) return; const d = Math.round((e.clientX - st.x0) / st.span * 61);
+      const v = st.part === 'low' ? ivSetLow(st.iv, st.iv.low + d) : st.part === 'high' ? ivSetHigh(st.iv, st.iv.high + d) : ivShift(st.iv, d); setManual(v.low, v.high); });
+    const end = () => { st = null; }; tr.addEventListener('pointerup', end); tr.addEventListener('pointercancel', end); }
+
+  // ---- 書き出し（動画 / 透過メーターのみ / 音声のみ） ----
+  const exporter = (() => {
+    let cancelFn = null;
+    const stamp = () => { const d = new Date(), p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; };
+    function wav(l, r) { // AVAudioFile standardFormat と同じ 32bit float・2ch・44.1kHz
+      const n = l.length, buf = new ArrayBuffer(44 + n * 8), v = new DataView(buf), w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+      w(0, 'RIFF'); v.setUint32(4, 36 + n * 8, true); w(8, 'WAVE'); w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 3, true); v.setUint16(22, 2, true);
+      v.setUint32(24, 44100, true); v.setUint32(28, 44100 * 8, true); v.setUint16(32, 8, true); v.setUint16(34, 32, true); w(36, 'data'); v.setUint32(40, n * 8, true);
+      const f = new Float32Array(buf, 44, n * 2); for (let i = 0; i < n; i++) { f[2 * i] = l[i]; f[2 * i + 1] = r[i]; }
+      return new Blob([buf], { type: 'audio/wav' });
+    }
+    function pickMime(alpha) {
+      const MR = window.MediaRecorder; if (!MR || !MR.isTypeSupported) return null;
+      const list = alpha ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus'] : ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4;codecs=avc1,mp4a', 'video/mp4;codecs=avc1.42E01E,opus', 'video/mp4;codecs=avc1,opus', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+      return list.find(t => MR.isTypeSupported(t)) || null;
+    }
+    const overlaySize = (w, h) => { const k = Math.min(1, 1280 / Math.max(w, h)); return { w: Math.max(2, Math.floor(w * k / 2) * 2), h: Math.max(2, Math.floor(h * k / 2) * 2) }; };
+    async function movie(ac, kind, audioLR, tl, onProgress) {
+      const transparent = kind === 'transparent';
+      let mime = pickMime(transparent), alpha = transparent && !!mime;
+      if (transparent && !mime) mime = pickMime(false); // 透過に対応しないブラウザ: 黒背景で書き出す（iOS の HEVC alpha 非対応時と同じ扱い）
+      if (!mime || !HTMLCanvasElement.prototype.captureStream) throw new Error('この端末のブラウザでは動画を書き出せません。');
+      const size = isVideo ? overlaySize(sourceSize.w, sourceSize.h) : { w: 720, h: 1280 };
+      const cv = document.createElement('canvas'); cv.width = size.w; cv.height = size.h;
+      const ctx = cv.getContext('2d', { alpha: true }), gc = document.createElement('canvas'); gc.width = size.w; gc.height = size.h; const gx = gc.getContext('2d');
+      const seconds = Math.min(duration, MAX_SECONDS), app = appearance();
+      let v = null;
+      if (isVideo && !transparent) { v = document.createElement('video'); v.muted = true; v.playsInline = true; v.setAttribute('playsinline', ''); v.preload = 'auto'; v.src = url;
+        await new Promise((res, rej) => { v.oncanplay = res; v.onerror = () => rej(new Error('video')); v.load(); }); }
+      const dest = ac.createMediaStreamDestination(), buf = ac.createBuffer(2, audioLR[0].length, 44100);
+      buf.copyToChannel(audioLR[0], 0); buf.copyToChannel(audioLR[1], 1);
+      const src = ac.createBufferSource(); src.buffer = buf; src.connect(dest);
+      const frame = (t) => {
+        ctx.clearRect(0, 0, size.w, size.h);
+        if (!alpha) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, size.w, size.h); }
+        if (v && v.readyState >= 2) ctx.drawImage(v, 0, 0, size.w, size.h);
+        G.render(gx, size.w, size.h, tl.states[Math.min(tl.states.length - 1, Math.max(0, Math.round(t * 30)))], tl.range, app);
+        ctx.drawImage(gc, 0, 0);
+      };
+      frame(0);
+      const stream = new MediaStream([...cv.captureStream(30).getVideoTracks(), ...dest.stream.getAudioTracks()]);
+      const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8000000, audioBitsPerSecond: 192000 });
+      const chunks = []; rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+      let stopped = false, tick = 0;
+      const finished = new Promise((res, rej) => { rec.onstop = () => res(); rec.onerror = (e) => rej(e.error || new Error('rec')); });
+      cancelFn = () => { stopped = true; try { rec.stop(); } catch (e) {} try { src.stop(); } catch (e) {} if (v) v.pause(); };
+      if (ac.state !== 'running') await ac.resume();
+      rec.start(1000); const t0 = ac.currentTime + 0.05; src.start(t0); if (v) { v.currentTime = 0; await v.play().catch(() => {}); }
+      await new Promise((res) => {
+        const step = () => {
+          if (stopped) return res();
+          const t = Math.max(0, ac.currentTime - t0);
+          frame(t); onProgress(Math.min(1, t / seconds));
+          if (t >= seconds) { stopped = true; try { src.stop(); } catch (e) {} if (v) v.pause(); setTimeout(() => { try { rec.stop(); } catch (e) {} res(); }, 120); return; }
+          tick = requestAnimationFrame(step);
+        };
+        tick = requestAnimationFrame(step);
+      });
+      await finished; cancelFn = null;
+      if (v) { v.removeAttribute('src'); v.load(); }
+      const type = mime.split(';')[0], ext = type === 'video/mp4' ? 'mp4' : 'webm';
+      return { blob: new Blob(chunks, { type }), ext, alpha, fellBack: transparent && !alpha };
+    }
+    return {
+      active: () => !!cancelFn, cancel() { if (cancelFn) cancelFn(); cancelFn = null; },
+      async run(kind) {
+        if (task || !srcFile) return;
+        const ac = kind === 'audio' ? null : new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 }); // ユーザー操作の中で作る（Safari）
+        if (ac && ac.resume) ac.resume().catch(() => {});
+        ads.noteAction(); if (media) media.pause();
+        setTask('video'); status('書き出しを準備しています…'); progress(0);
+        let my = job;
+        try {
+          if (!result || result.key !== keyOf(analysisMode, outputAudio)) { // 設定が変わったときだけ再処理（iOS は書き出しごとに同じ処理を実行）
+            result = await runProcess(analysisMode, outputAudio, (u) => progress(u * 0.5)); analysisFrames = result.frames; rebuildTimeline(); renderRange(); my = job;
+          }
+          const audioLR = result.stem || [L, R];
+          let out;
+          if (kind === 'audio') out = { blob: wav(audioLR[0], audioLR[1]), ext: 'wav' };
+          else { status('書き出しています…（再生と同じ時間がかかります）'); out = await movie(ac, kind, audioLR, timeline, (u) => progress(0.5 + u * 0.5)); }
+          if (!task || my !== job) return;
+          const name = `pitchmeter-${stamp()}.${out.ext}`;
+          output = { file: new File([out.blob], name, { type: out.blob.type }), kind };
+          completed.unshift(output); renderPast();
+          progress(null); setTask(null);
+          $('shareBtn').hidden = false; $('outDesc').hidden = false;
+          $('outDesc').textContent = `${kind === 'audio' ? 'WAV音声' : '動画'} / 最大${MAX_SECONDS}秒。完成ファイルは追加消費なしで保存し直せます。` + (out.fellBack ? '（このブラウザは透過動画に対応していないため、黒背景で書き出しました）' : '');
+          status(kind === 'audio' ? '書き出しが完成しました' : '書き出しが完成しました。保存・共有先を選んでください。閉じた場合も完成ファイルは履歴に残ります。');
+          ads.atExportCompletion(playing());
+        } catch (e) {
+          if (!task) return; progress(null); setTask(null);
+          status(e && /ブラウザ/.test(e.message || '') ? e.message : '書き出し・解析を完了できませんでした。完成ファイル一覧と試用残数を確認してください。');
+        } finally { if (ac) ac.close().catch(() => {}); }
+      },
+    };
+  })();
+  $('exVideo').onclick = () => exporter.run('video');
+  $('exAlpha').onclick = () => exporter.run('transparent');
+  $('exAudio').onclick = () => exporter.run('audio');
+  async function share(f) {
+    try { if (navigator.canShare && navigator.canShare({ files: [f] })) { await navigator.share({ files: [f] }); return; } } catch (e) { if (e && e.name === 'AbortError') return; }
+    const a = document.createElement('a'), u = URL.createObjectURL(f); a.href = u; a.download = f.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 60000);
+  }
+  $('shareBtn').onclick = () => { if (output) share(output.file); };
+  function renderPast() {
+    $('pastExports').hidden = !completed.length; const list = $('pastList'); list.innerHTML = '';
+    for (const c of completed) { const b = document.createElement('button'); b.className = 'linkbtn'; b.textContent = c.file.name; b.onclick = () => share(c.file); list.appendChild(b); }
+  }
+
+  return {
+    resize, redraw: draw, choose,
+    rewardEligible: () => !task && !playing() && !fullscreen && document.visibilityState === 'visible',
+  };
+})();
 // ======================= リアルタイム =======================
 const live = (() => {
   const cv = $('liveCanvas'); let running = false, ctx = null, stream = null, node = null, src = null, worker = null, gen = 0, tl = null, raf = 0, lastT = 0, devHandler = null, lastRange = C.defaultRange();
@@ -372,5 +767,8 @@ const rec = (() => {
   return { cancel: close };
 })();
 
+ads.build(); ads.update();
 selectTab('file');
+// 起動時のプラン画面（FirstLaunchPlusPolicy: 加入者以外に、起動ごとに1回）。ウェブ版は表示のみ。
+if (!/[?&]noplan\b/.test(location.search)) plan.open();
 })();

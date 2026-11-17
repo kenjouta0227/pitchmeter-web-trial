@@ -452,8 +452,8 @@ class GaugeTimeline {
   }
 }
 /** Precomputed 30 fps states for file playback (GaugeTimeline.init). */
-function buildStates(frames, vertical) {
-  const tl = new GaugeTimeline(frames, makeRange(frames), vertical); const states = [];
+function buildStates(frames, vertical, selectedRange) {
+  const tl = new GaugeTimeline(frames, selectedRange || makeRange(frames), vertical); const states = [];
   const count = Math.max(1, Math.ceil(frames.length * 0.02 * 30));
   for (let k = 0; k < count; k++) states.push(tl.tick(k / 30, 1 / 30, false));
   return { range: tl.range, states };

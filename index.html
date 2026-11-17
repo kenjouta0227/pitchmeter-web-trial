@@ -5,56 +5,159 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex,nofollow">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' blob:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' blob: data:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="theme-color" content="#0d0e11">
 <title>ピッチメーター 試作版（ウェブ）</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div id="trialBanner" role="note">試作版（ウェブ）・広告/課金なし</div>
+<svg class="sprite" width="0" height="0" aria-hidden="true">
+  <defs>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 10.6v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="7.5" r="1.15" fill="currentColor"/></symbol>
+    <symbol id="i-chevdown" viewBox="0 0 24 24"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 5.5l6.5 6.5L9 18.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24"><path d="M12 3.5v11M8 7.2l4-3.8 4 3.8M7.5 10.5H6a1.5 1.5 0 0 0-1.5 1.5v7A1.5 1.5 0 0 0 6 20.5h12a1.5 1.5 0 0 0 1.5-1.5v-7a1.5 1.5 0 0 0-1.5-1.5h-1.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-dashed" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.6"/></symbol>
+    <symbol id="i-wave" viewBox="0 0 24 24"><path d="M3 12h1.5M6.5 9v6M9.5 5.5v13M12.5 8v8M15.5 4v16M18.5 9.5v5M21 12h0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7 5v14M17 5v14M3 9.5h4M3 14.5h4M17 9.5h4M17 14.5h4" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/></symbol>
+    <symbol id="i-crown" viewBox="0 0 24 24"><path d="M3.5 8l4.5 4 4-6.5 4 6.5 4.5-4-2 10h-13z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3.5l8.5 4.5-8.5 4.5L3.5 8z M3.5 12l8.5 4.5 8.5-4.5 M3.5 16l8.5 4.5 8.5-4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="currentColor"/><path d="M7.5 12.3l3 3 6-6.3" fill="none" stroke="#17171c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-restore" viewBox="0 0 24 24"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4v4h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-bubble" viewBox="0 0 24 24"><path d="M4 5.5h16v10H10l-4.5 4v-4H4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24"><path d="M6 3.5h8l4 4v13H6z M14 3.5v4h4 M9 12h6M9 15.5h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+    <symbol id="i-hand" viewBox="0 0 24 24"><path d="M8 12V6.5a1.3 1.3 0 0 1 2.6 0V11 M10.6 11V4.8a1.3 1.3 0 0 1 2.6 0V11 M13.2 11V5.8a1.3 1.3 0 0 1 2.6 0V12 M15.8 12V8.3a1.3 1.3 0 0 1 2.6 0v6.2a6 6 0 0 1-6 6h-.6a6 6 0 0 1-5-2.7L4.3 14a1.4 1.4 0 0 1 2.2-1.7L8 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-stack" viewBox="0 0 24 24"><rect x="4" y="9" width="16" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M6.5 6h11M9 3.5h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+    <symbol id="i-rot" viewBox="0 0 24 24"><path d="M17.5 8A7 7 0 1 0 19 13M19 4v4.5h-4.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-scale" viewBox="0 0 24 24"><path d="M5 5l14 14M5 5v5M5 5h5M19 19v-5M19 19h-5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
+<div id="trialBanner" role="note">試作版（ウェブ）・広告は枠のみ／課金なし</div>
 
 <!-- 素材分析 -->
 <section id="tab-file" class="pane" aria-label="素材分析">
-  <div class="scroll">
-    <div class="row"><span class="eyebrow">PITCH METER</span><span class="spacer"></span><button class="btn" id="guideBtn">使い方</button></div>
+  <div class="scroll studio-bg" id="fileScroll">
+    <div class="row"><span class="eyebrow accentText">PITCH METER</span><span class="spacer"></span><button class="sbtn" id="guideBtn">使い方</button></div>
     <h1 class="hero file">声の高さを、<br>なめらかに映す。</h1>
-    <div class="card trial">
-      <div class="row"><strong>試作版（ウェブ）</strong><span class="spacer"></span><span class="badge">最大300秒</span></div>
+
+    <!-- usageCard（iOS と同じ2行構成。ウェブ版は回数制限・購入なし） -->
+    <div class="usage">
+      <div class="row"><span class="plan-name" id="planName">Fullプラン（ウェブ試作版）</span><span class="spacer"></span><button class="sbtn foot" id="planBtn">プラン・購入 ›</button></div>
+      <div class="row g8"><span class="caption">回数の制限なし</span><button class="info sm" data-info="利用回数" aria-label="利用回数の説明"><svg><use href="#i-info"/></svg></button><span class="spacer"></span><button class="linkbtn caption" id="fullWhatBtn">Fullでできること ›</button></div>
     </div>
+
+    <!-- rewardButton（広告枠） -->
+    <div class="reward-wrap ad-slot" id="adReward" data-slot="reward">
+      <button class="reward" id="rewardBtn">
+        <span class="row center g10"><span class="reward-dot"><svg><use href="#i-play"/></svg></span><span class="reward-title">広告を見てFullを1回試す</span></span>
+        <span class="reward-sub">広告の視聴完了後、Fullの機能を1回使えます。</span>
+      </button>
+      <p class="caption" id="rewardMsg" hidden></p>
+    </div>
+
+    <!-- materialButtons -->
     <div class="stack pick">
-      <button class="btn primary big" id="pickBtn"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M7 5v14M17 5v14M3 9.5h4M3 14.5h4M17 9.5h4M17 14.5h4"/></svg>写真かファイルから選ぶ</button>
-      <!-- 1つの入力でOK: iOS Safari は capture なし・image/* なしの video/* を含む accept で「写真ライブラリ / ビデオを撮る / ファイルを選択」の標準メニューを出す -->
+      <button class="sbtn primary big" id="pickBtn"><svg class="ico"><use href="#i-film"/></svg>写真かファイルから選ぶ</button>
+      <!-- 1つの入力でOK: iOS Safari は「写真ライブラリ / ビデオを撮る / ファイルを選択」の標準メニューを出す -->
       <input type="file" id="fileInput" accept="video/*,audio/*,.mp4,.mov,.m4v,.mp3,.m4a,.wav,.aac,.caf,.aif,.aiff" hidden>
-      <!-- サンプル音声（録音は端末内のメモリだけ・解析は素材と同じ経路） -->
-      <button class="btn big" id="sampleBtn"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>サンプル音声を追加</button>
+      <button class="sbtn white big" id="sampleBtn"><svg class="ico"><use href="#i-mic"/></svg>サンプル音声を追加</button>
     </div>
-    <div class="card" id="editCard" hidden>
-      <div class="caption" id="fileName"></div>
+
+    <!-- editingCard -->
+    <div class="card edit" id="editCard" hidden>
+      <div class="caption clamp2" id="fileName"></div>
       <div class="caption" id="fileStatus" aria-live="polite"></div>
-      <div class="progress" id="progressWrap" hidden><div class="bar" id="progressBar"></div><span id="progressText">0%</span><button class="btn small" id="cancelBtn">中止</button></div>
-      <div id="stage" class="stage" hidden>
-        <video id="video" playsinline webkit-playsinline preload="auto"></video>
-        <canvas id="overlay"></canvas>
+      <div id="stageBox" class="stage-box" hidden>
+        <div id="stageFit" class="stage-fit">
+          <video id="video" playsinline webkit-playsinline preload="auto"></video>
+          <canvas id="overlay"></canvas>
+          <div id="editor" class="editor" aria-label="メーターの位置とサイズ">
+            <i class="guide-v" id="guideV"></i><i class="guide-h" id="guideH"></i>
+            <div class="sel" id="selBox" hidden></div>
+            <div class="hit" id="meterHit" role="button" aria-label="メーターの位置とサイズ" title="ドラッグで移動、2本指で拡大縮小と回転"></div>
+            <button class="handle" id="rotHandle" aria-label="メーターを回転" hidden><svg><use href="#i-rot"/></svg></button>
+            <button class="handle" id="scaleHandle" aria-label="メーターを拡大縮小" hidden><svg><use href="#i-scale"/></svg></button>
+            <button class="reset-place" id="resetPlace" hidden>配置をリセット</button>
+            <span class="deg" id="degBadge" hidden>0°</span>
+          </div>
+        </div>
       </div>
-      <audio id="audio" preload="auto" hidden></audio>
+      <div class="caption" id="placeHint" hidden>メーターをタップして位置・サイズ・角度を調整</div>
       <div id="controls" hidden>
-        <div class="row gap">
-          <button class="btn" id="playBtn">再生</button><button class="btn" id="stopBtn">停止</button>
+        <div class="row g8">
+          <button class="sbtn" id="playBtn">再生</button><button class="sbtn" id="stopBtn">停止</button>
           <span class="spacer"></span><span class="caption" id="playState">停止中</span>
+          <button class="sbtn" id="fsBtn">全画面</button>
         </div>
         <input type="range" id="seek" min="0" max="1" step="0.01" value="0" aria-label="再生位置">
-        <div class="caption mono" id="timeText">0:00 / 0:00</div>
+        <div class="caption mono" id="timeText">00:00 / 00:00</div>
       </div>
-      <div class="settings" id="settings" hidden>
-        <div class="row"><span>歌声補正</span><span class="spacer"></span><span class="select">原音（ウェブ版は伴奏分離なし）</span></div>
-        <div class="row"><span>メーターの向き</span><span class="spacer"></span>
-          <button class="orient on" data-v="0" id="orientH"><i class="h"></i>横</button><button class="orient" data-v="1" id="orientV"><i class="v"></i>縦</button></div>
-        <div class="row caption" id="rangeText"></div>
-        <div class="row caption" id="statsText"></div>
+      <div class="progress" id="progressWrap" hidden><span class="spinner" aria-hidden="true"></span><div class="bar" id="progressBar"></div><span id="progressText" class="caption mono">0%</span><button class="sbtn small" id="cancelBtn">中止</button></div>
+
+      <!-- settingsCard -->
+      <div class="settings" id="settings">
+        <div class="row">
+          <span class="ilabel">歌声補正<button class="info" data-info="歌声補正" aria-label="歌声補正の説明"><svg><use href="#i-info"/></svg></button></span>
+          <span class="spacer"></span>
+          <label class="select"><select id="analysisSel" aria-label="歌声補正"><option value="original">原音</option><option value="vocal">歌声</option><option value="assisted" selected>歌声＋保守的補完</option></select><span class="selval" id="analysisVal">歌声＋保守的補完</span><svg><use href="#i-chevdown"/></svg></label>
+        </div>
+        <div class="row" id="audioRow">
+          <span class="ilabel">音声<button class="info" data-info="音声" aria-label="音声の説明"><svg><use href="#i-info"/></svg></button></span><span class="pbadge">Full</span>
+          <span class="spacer"></span>
+          <label class="select"><select id="audioSel" aria-label="音声"><option value="original" selected>原音</option><option value="vocal">歌声のみ</option><option value="accompaniment">伴奏のみ</option></select><span class="selval" id="audioVal">原音</span><svg><use href="#i-chevdown"/></svg></label>
+        </div>
+        <div class="row">
+          <span class="ilabel">メーターの向き<button class="info" data-info="メーターの向き" aria-label="メーターの向きの説明"><svg><use href="#i-info"/></svg></button></span>
+          <span class="spacer"></span>
+          <button class="orient on" data-v="0" id="orientH"><i class="h"></i>横</button><button class="orient" data-v="1" id="orientV"><i class="v"></i>縦</button>
+          <span class="pbadge">Full</span>
+        </div>
+        <div class="row">
+          <span class="ilabel">開発者アイコンの表示切替<button class="info" data-info="開発者アイコンの表示切替" aria-label="開発者アイコンの表示切替の説明"><svg><use href="#i-info"/></svg></button></span>
+          <span class="fp">Full / Plus</span>
+          <span class="spacer"></span>
+          <label class="switch"><input type="checkbox" id="brandToggle" checked aria-label="開発者アイコンの表示切替"><i></i></label>
+        </div>
       </div>
-      <button class="btn" id="reBtn" hidden>解析する・再解析</button>
+
+      <!-- rangeCard -->
+      <div class="rangecard" id="rangeCard" hidden>
+        <div class="row"><span class="ilabel">音域設定<button class="info" data-info="音域設定" aria-label="音域設定の説明"><svg><use href="#i-info"/></svg></button></span></div>
+        <div class="row g12">
+          <button class="radio on" id="rangeAuto"><i></i>自動設定</button>
+          <button class="radio" id="rangeManual"><i></i>手動設定</button>
+          <span class="pbadge">Full</span>
+        </div>
+        <div class="row caption"><span id="rangeLowText"></span><span class="spacer"></span><span id="rangeHighText" class="ralign"></span></div>
+        <div class="caption" id="rangeSpan"></div>
+        <div class="midi" id="midiCtl">
+          <input class="mnum" id="midiLow" inputmode="numeric" aria-label="最低音 MIDI">
+          <div class="mtrack" id="midiTrack"><i class="mbase"></i><i class="mband" id="midiBand"></i><i class="mknob" id="midiLowKnob" aria-label="最低音 MIDI ハンドル"></i><i class="mknob" id="midiHighKnob" aria-label="最高音 MIDI ハンドル"></i></div>
+          <input class="mnum" id="midiHigh" inputmode="numeric" aria-label="最高音 MIDI">
+        </div>
+      </div>
+
+      <button class="sbtn" id="reBtn">解析する・再解析</button>
+      <div class="exports" id="exports" hidden>
+        <button class="sbtn primary xl" id="exVideo"><svg class="ico"><use href="#i-share"/></svg>動画を書き出す</button>
+        <button class="sbtn" id="exAlpha"><svg class="ico"><use href="#i-dashed"/></svg>透過メーターのみを書き出す</button>
+        <button class="sbtn" id="exAudio"><svg class="ico"><use href="#i-wave"/></svg>音声のみを書き出す</button>
+      </div>
+      <button class="sbtn" id="shareBtn" hidden><svg class="ico"><use href="#i-share"/></svg>完成したファイルを保存・共有</button>
+      <div class="caption" id="outDesc" hidden></div>
     </div>
+
+    <div class="footer-links">
+      <details id="pastExports" hidden><summary>過去の書き出し</summary><div id="pastList"></div></details>
+    </div>
+    <!-- Native ad: 素材分析のいちばん下（区切り線＋余白でアプリの操作から離す） -->
+    <div class="ad-divider" aria-hidden="true"></div>
+    <div id="adNative" class="ad-slot" data-slot="native"></div>
+    <div class="tailspace" aria-hidden="true"></div>
   </div>
 </section>
 
@@ -74,28 +177,133 @@
   </div>
 </section>
 
-<!-- その他 -->
+<!-- その他（ProfileLinksView） -->
 <section id="tab-profile" class="pane" aria-label="その他" hidden>
   <div class="scroll">
     <span class="eyebrow">MORE</span>
     <h1 class="hero pink">その他</h1>
-    <button class="rowlink" data-sheet="support"><span>サポート</span><span class="chev">›</span></button>
-    <button class="rowlink" data-sheet="feedback"><span>ご意見・ご要望</span><span class="chev">›</span></button>
-    <a class="rowlink" href="https://www.apple.com/legal/internet-services/itunes/dev/stdeula/" target="_blank" rel="noopener noreferrer"><span>利用規約</span><span class="chev">↗</span></a>
-    <a class="rowlink" href="https://pitch-meter-support.kenjouta0227.workers.dev/privacy" target="_blank" rel="noopener noreferrer"><span>プライバシーポリシー</span><span class="chev">↗</span></a>
-    <button class="rowlink" data-sheet="license"><span>ライセンス</span><span class="chev">›</span></button>
-    <p class="caption muted">利用規約・プライバシーポリシーはアプリ版と同じ公開ページを開きます（タップしたときだけ外部ページに移動します）。</p>
+    <button class="rowlink" id="rowSupport"><span class="row g10"><svg class="rico"><use href="#i-bubble"/></svg>サポート・ご意見・ご要望</span><svg class="rchev"><use href="#i-chev"/></svg></button>
+    <button class="rowlink" data-legal="terms"><span class="row g10"><svg class="rico"><use href="#i-doc"/></svg>利用規約</span><svg class="rchev"><use href="#i-chev"/></svg></button>
+    <button class="rowlink" data-legal="privacy"><span class="row g10"><svg class="rico"><use href="#i-hand"/></svg>プライバシーポリシー</span><svg class="rchev"><use href="#i-chev"/></svg></button>
+    <button class="rowlink" id="rowLicense"><span class="row g10"><svg class="rico"><use href="#i-stack"/></svg>ライセンス・第三者ソフトウェア</span><svg class="rchev"><use href="#i-chev"/></svg></button>
   </div>
 </section>
 
-<nav id="tabbar" aria-label="タブ">
-  <div class="capsule">
-    <div class="pill" id="pill" aria-hidden="true"></div>
-    <button class="tab" data-tab="file" aria-label="素材分析"><svg viewBox="0 0 24 24" data-glyph="analysis"></svg><span>素材分析</span></button>
-    <button class="tab" data-tab="live" aria-label="リアルタイム"><svg viewBox="0 0 24 24" data-glyph="live"></svg><span>リアルタイム</span></button>
-    <button class="tab" data-tab="profile" aria-label="その他"><svg viewBox="0 0 24 24" data-glyph="profile"></svg><span>その他</span></button>
+<div id="bottomBar">
+  <nav id="tabbar" aria-label="タブ">
+    <div class="capsule">
+      <div class="pill" id="pill" aria-hidden="true"></div>
+      <button class="tab" data-tab="file" aria-label="素材分析"><svg viewBox="0 0 24 24" data-glyph="analysis"></svg><span>素材分析</span></button>
+      <button class="tab" data-tab="live" aria-label="リアルタイム"><svg viewBox="0 0 24 24" data-glyph="live"></svg><span>リアルタイム</span></button>
+      <button class="tab" data-tab="profile" aria-label="その他"><svg viewBox="0 0 24 24" data-glyph="profile"></svg><span>その他</span></button>
+    </div>
+  </nav>
+  <div id="adBanner" class="ad-slot" data-slot="banner" hidden></div>
+</div>
+
+<!-- 全画面（FullscreenPlayback） -->
+<div id="fs" class="fs" hidden role="dialog" aria-modal="true" aria-label="全画面">
+  <div class="fs-close"><span class="spacer"></span><button class="sbtn" id="fsClose">閉じる</button><button class="info" data-info="全画面" aria-label="全画面の説明"><svg><use href="#i-info"/></svg></button></div>
+  <div class="fs-stage" id="fsStage"></div>
+  <div class="fs-controls">
+    <div class="caption mono center" id="fsTime">00:00 / 00:00</div>
+    <div class="row g6"><input type="range" id="fsSeek" min="0" max="1" step="0.01" value="0" aria-label="再生位置"><button class="info" data-info="再生・試聴" aria-label="再生・試聴の説明"><svg><use href="#i-info"/></svg></button></div>
+    <div class="row"><button class="sbtn" id="fsPlay">▶ 再生</button><button class="info" data-info="再生・試聴" aria-label="再生・試聴の説明"><svg><use href="#i-info"/></svg></button><span class="spacer"></span><button class="sbtn" id="fsStop">■ 停止</button><button class="info" data-info="再生・試聴" aria-label="再生・試聴の説明"><svg><use href="#i-info"/></svg></button></div>
   </div>
-</nav>
+</div>
+
+<!-- プラン（PlanGuideScreen・表示のみ） -->
+<div id="plan" class="fullcover studio-bg" hidden role="dialog" aria-modal="true" aria-label="有料プラン">
+  <div class="plan-inner">
+    <div class="row top">
+      <div><div class="eyebrow pinkText bold">PITCH METER</div><div class="plan-title accentText">有料プラン</div></div>
+      <span class="spacer"></span><button class="sbtn icon" id="planClose" aria-label="閉じる"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <p class="sub">使い方に合わせて Full / Plus を選べます。</p>
+    <div class="plancard full">
+      <div class="row g10"><svg class="pico"><use href="#i-crown"/></svg><span class="ptitle">Full</span><span class="ptag">最上位プラン</span></div>
+      <ul class="feat"><li>最大300秒までの書き出し</li><li>手動での音域設定が可能</li><li>縦メーター</li><li>透過メーターのみの書き出し</li><li>音声のみの書き出し</li><li>出力音声の形式を「原音・歌声・伴奏」から選択可能</li></ul>
+      <hr><div class="row base"><span class="caption">月額</span><span class="price">¥2,480</span></div><hr>
+      <div class="row"><span class="spacer"></span><button class="sbtn primary" data-review="Full">Fullを確認 ›</button></div>
+    </div>
+    <div class="plancard plus">
+      <div class="row g10"><svg class="pico"><use href="#i-layers"/></svg><span class="ptitle">Plus</span><span class="ptag">標準プラン</span></div>
+      <ul class="feat"><li>最大90秒までの書き出し</li><li>自動での音域設定が可能</li><li>透過メーターのみの書き出し</li><li>開発者アイコンの表示切替</li></ul>
+      <hr><div class="row base"><span class="caption">月額</span><span class="price">¥1,480</span><span class="spacer"></span><button class="sbtn whiteb" data-review="Plus">Plusを確認 ›</button></div>
+    </div>
+    <button class="sbtn wide" disabled><svg class="ico"><use href="#i-restore"/></svg>購入を復元</button>
+    <button class="plain wide" id="planContinue">今は無料で続ける</button>
+    <div class="row center caption"><a href="https://www.apple.com/legal/internet-services/itunes/dev/stdeula/" target="_blank" rel="noopener noreferrer">利用規約</a><span>｜</span><a href="https://pitch-meter-support.kenjouta0227.workers.dev/privacy" target="_blank" rel="noopener noreferrer">プライバシーポリシー</a></div>
+    <p class="caption muted">解約は、iPhoneの「設定」→ 自分の名前 →「サブスクリプション」から行えます。</p>
+    <button class="plain caption" disabled>購入状態を再読込</button>
+    <p class="caption2 muted">ウェブ試作版のため、購入・復元はできません（表示のみ）。価格はアプリ版（日本向け）の月額です。</p>
+  </div>
+</div>
+
+<!-- 使い方（LocalUsageGuide） -->
+<div id="guide" class="fullcover guide-bg" hidden role="dialog" aria-modal="true" aria-labelledby="guideTitle">
+  <div class="guide-inner">
+    <div class="row"><strong id="guideTitle">使い方</strong><span class="spacer"></span><button class="sbtn" id="guideClose">閉じる</button></div>
+    <div class="guide-body">
+      <p>動画・音声を選び、素材を端末内で解析します。</p>
+      <p>Fullは先頭300秒、Plusは先頭90秒。無料は先頭40秒です。</p>
+      <p>Fullでは「メーターの向き」から「縦」を選べます。</p>
+      <p>解析結果を確認し、メーター付き動画または対応する音声を書き出します。原本は上書きしません。</p>
+      <p>各操作の「詳細」から条件を確認できます。</p>
+    </div>
+  </div>
+</div>
+
+<!-- 説明（StudioInformationModal） -->
+<div id="infoModal" class="infomodal" hidden role="dialog" aria-modal="true" aria-labelledby="infoTitle">
+  <div class="infobox">
+    <div class="row"><strong id="infoTitle"></strong><span class="spacer"></span><button class="xbtn" id="infoClose" aria-label="説明を閉じる"><svg><use href="#i-x"/></svg></button></div>
+    <p id="infoText"></p>
+  </div>
+</div>
+
+<!-- インタースティシャル広告枠 -->
+<div id="adInterstitial" class="ad-inter" hidden role="dialog" aria-modal="true" aria-label="広告">
+  <div class="ad-inter-box"><span class="ad-badge">広告</span><div class="ad-inter-body">広告枠（全画面）<br><small>ウェブ版は枠のみです。広告は読み込みません。</small></div><button class="sbtn" id="adInterClose">閉じる</button></div>
+</div>
+
+<!-- サポート（FeedbackPanel）・ライセンス（LicenseReader）・利用規約/プライバシー -->
+<div id="sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+  <div class="sheetBody">
+    <div class="navbar"><span class="spacer"></span><strong id="sheetTitle"></strong><span class="spacer"></span><button class="plain pinkText" id="sheetClose">閉じる</button></div>
+    <div id="sheetContent"></div>
+  </div>
+</div>
+
+<template id="t-support">
+  <div class="feedback">
+    <h3>サポート・ご意見・ご要望</h3>
+    <div class="row g6"><p class="caption">問い合わせ内容や、改善点・追加機能の希望を入力できます。</p><button class="info" data-info-title="ご意見・ご要望" data-info-text="改善点や追加機能の希望を入力できます。&#10;ご意見は今後の改善の参考にします。入力だけでは送信しません。" aria-label="ご意見・ご要望の説明"><svg><use href="#i-info"/></svg></button></div>
+    <p class="caption">問い合わせ内容・改善してほしい点</p>
+    <div class="row g6"><textarea id="fbImprove" rows="4"></textarea><button class="info" data-info-title="ご意見・ご要望" data-info-text="改善点・追加機能の希望を入力し、メール作成・コピー・入力消去を行います。&#10;入力は端末内に保持します。メール画面で宛先・内容を確認して送信してください。素材・解析結果は自動添付しません。" aria-label="ご意見・ご要望の説明"><svg><use href="#i-info"/></svg></button></div>
+    <p class="caption">追加してほしい機能</p>
+    <div class="row g6"><textarea id="fbFeature" rows="4"></textarea><button class="info" data-info-title="ご意見・ご要望" data-info-text="改善点・追加機能の希望を入力し、メール作成・コピー・入力消去を行います。&#10;入力は端末内に保持します。メール画面で宛先・内容を確認して送信してください。素材・解析結果は自動添付しません。" aria-label="ご意見・ご要望の説明"><svg><use href="#i-info"/></svg></button></div>
+    <p class="caption">宛先：kenjouta0227@gmail.com。メール画面で内容を確認して送信してください。素材や解析結果を自動添付しません。</p>
+    <p class="caption">通常1週間以内を目安に返信します。お問い合わせの相談内容・対応メールは、対応完了後6か月を目安に削除します。アプリ内の音声や利用記録とは別です。自動削除や期限保証ではありません。パスワード・認証コード・支払情報は入力しないでください。</p>
+    <button class="linkbtn" id="fbMail">サポートに問い合わせる（メールを作成）</button>
+    <button class="linkbtn" id="fbCopy">宛先・本文をコピー</button>
+    <a class="linkbtn" href="https://pitch-meter-support.kenjouta0227.workers.dev/contact" target="_blank" rel="noopener noreferrer">公開サポートページ</a>
+    <button class="linkbtn" id="fbClear">入力を消去</button>
+    <p class="caption" id="fbMsg">入力は端末内に保持します。まだ送信していません。</p>
+  </div>
+</template>
+<template id="t-license">
+  <div class="license">
+    <div class="row g6"><a class="linkbtn" href="ThirdPartyNotices.txt" download="ThirdPartyNotices.txt">ライセンス全文を保存・共有</a><button class="info" data-info-title="ライセンス" data-info-text="文書を選び、ページを移動・保存します。&#10;第三者ソフトウェアの条件を確認できます。処理区分や素材は変更しません。" aria-label="ライセンスの説明"><svg><use href="#i-info"/></svg></button></div>
+    <p class="caption muted" id="licHint">ライセンスを読み込み中</p>
+    <div class="row g8" id="licNav" hidden>
+      <button class="linkbtn" id="licPrev">前へ</button>
+      <label class="select small"><select id="licPage" aria-label="ページ"></select><span class="selval" id="licPageVal"></span><svg><use href="#i-chevdown"/></svg></label>
+      <button class="linkbtn" id="licNext">次へ</button>
+    </div>
+    <pre class="lictext" id="licText" aria-label="ライセンス本文" tabindex="0"></pre>
+  </div>
+</template>
 
 <div id="recSheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="recTitle">
   <div class="sheetBody rec-sheet">
@@ -108,38 +316,8 @@
     <p class="rec-msg" id="recMsg" aria-live="polite"></p>
   </div>
 </div>
-<div id="sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
-  <div class="sheetBody">
-    <div class="row"><strong id="sheetTitle"></strong><span class="spacer"></span><button class="btn small" id="sheetClose">閉じる</button></div>
-    <div id="sheetContent"></div>
-  </div>
-</div>
 
-<template id="t-support">
-  <p>アプリの使い方やうまく動かないときのご相談は、公開サポートページから受け付けています。</p>
-  <p><a class="btn" href="https://pitch-meter-support.kenjouta0227.workers.dev/contact" target="_blank" rel="noopener noreferrer">公開サポートページ ↗</a></p>
-  <p class="caption muted">メールでの問い合わせ（入力欄・メール作成）はアプリ版で確認できます。ウェブ版は何も送信しません。</p>
-</template>
-<template id="t-feedback">
-  <p>改善してほしい点や、追加してほしい機能の希望を受け付けています。</p>
-  <p><a class="btn" href="https://pitch-meter-support.kenjouta0227.workers.dev/contact" target="_blank" rel="noopener noreferrer">公開サポートページ ↗</a></p>
-  <p class="caption muted">入力欄（端末内に保存・メール作成）はアプリ版で確認できます。ご意見は今後の改善の参考にします。</p>
-</template>
-<template id="t-license">
-  <p>このウェブ試作版は、第三者のライブラリ・フォント・外部サービスを使っていません。ブラウザの標準機能（Web Audio、Canvas、Web Worker）だけで動きます。</p>
-  <p>音の高さの検出・声区（ミックス／裏声）判定・メーター描画は、ピッチメーターのアプリ版と同じ処理をJavaScriptに移したものです。</p>
-  <p class="caption muted">アプリ版のライセンス・第三者ソフトウェアの一覧（伴奏分離モデルなど）はアプリ版で確認できます。</p>
-  <p class="caption muted">© ピッチメーター</p>
-</template>
-<template id="t-guide">
-  <ol class="guide">
-    <li>「動画・音声を選ぶ」か「写真から選ぶ」で素材を選びます（mp3 / m4a / wav / aac / mp4 / mov など）。</li>
-    <li>端末の中で解析が終わると、メーターが付いて再生できます。ポインターに音名・Hz・「ミックス」「裏声」が付いて動きます。</li>
-    <li>「リアルタイム」では「開始」を押してマイクを許可すると、その場の声で動きます。</li>
-  </ol>
-  <p class="caption muted">「ミックス」「裏声」は6本の声サンプル（約B4〜F5）から作った目安で、およそ440〜1000Hzのときだけ表示されます。地声・ヘッドボイスはまだ見分けられません。</p>
-</template>
-
+<script src="ads-config.js"></script>
 <script src="core.js"></script>
 <script src="gauge.js"></script>
 <script src="app.js"></script>
