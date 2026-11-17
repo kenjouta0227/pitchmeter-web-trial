@@ -261,21 +261,55 @@ const file = (() => {
     startAnalysis();
   }
   $('reBtn').onclick = () => { if (srcFile && !task) { clearPlayback(); output = null; $('shareBtn').hidden = true; $('outDesc').hidden = true; result = null; analysisFrames = null; $('rangeCard').hidden = true; $('exports').hidden = true; startAnalysis(); } };
+  // 2026-11-18: 動画（mov / mp4 / m4v）は decodeAudioData が開けない・止まることがある（iPhone の画面収録など）。
+  // そのときは端末内で AAC 音声トラックだけを取り出して（PMCore.MovAudio）ADTS → decodeAudioData、だめなら WebCodecs AudioDecoder で復号する。
+  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const decodeAudio = (buf, ms) => new Promise((res, rej) => {
+    const ctx = new OAC(2, 1, 44100); let done = false;
+    const ok = (d) => { if (!done) { done = true; res(d); } }, ng = (e) => { if (!done) { done = true; rej(e || new Error('decode')); } };
+    if (ms) setTimeout(() => ng(new Error('decode timeout')), ms);
+    try { const p = ctx.decodeAudioData(buf, ok, ng); if (p && p.then) p.then(ok, ng); } catch (e) { ng(e); }
+  });
+  async function webCodecsDecode(m) {
+    if (typeof AudioDecoder === 'undefined') throw new Error('decode: no AudioDecoder');
+    const cfg = { codec: 'mp4a.40.' + m.aot, sampleRate: m.sampleRate, numberOfChannels: m.channels, description: m.asc };
+    if (!(await AudioDecoder.isConfigSupported(cfg)).supported) throw new Error('decode: AAC unsupported');
+    const parts = [], chs = Math.max(1, Math.min(2, m.channels)); let err = null;
+    const dec = new AudioDecoder({ output: (a) => { const ch = []; for (let c = 0; c < chs; c++) { const x = new Float32Array(a.numberOfFrames); a.copyTo(x, { planeIndex: Math.min(c, a.numberOfChannels - 1), format: 'f32-planar' }); ch.push(x); } parts.push(ch); a.close(); }, error: (e) => { err = e; } });
+    dec.configure(cfg); let t = 0;
+    for (const f of m.frames) { dec.decode(new EncodedAudioChunk({ type: 'key', timestamp: Math.round(t * 1e6 / m.sampleRate), data: f })); t += 1024; }
+    await dec.flush(); dec.close(); if (err) throw err;
+    let n = 0; for (const p of parts) n += p[0].length; if (!n) throw new Error('decode: empty');
+    const ctx = new OAC(chs, Math.max(1, Math.ceil(n * 44100 / m.sampleRate)), 44100), b = ctx.createBuffer(chs, n, m.sampleRate);
+    for (let c = 0; c < chs; c++) { const o = b.getChannelData(c); let k = 0; for (const p of parts) { o.set(p[c], k); k += p[c].length; } }
+    if (m.sampleRate === 44100) return b;
+    const src = ctx.createBufferSource(); src.buffer = b; src.connect(ctx.destination); src.start(); return await ctx.startRendering();
+  }
+  async function decodeContainer(buf) {
+    const m = C.MovAudio.demux(buf); let d = null;
+    try { d = await decodeAudio(C.MovAudio.toADTS(m).buffer, 20000); } catch (e) { d = await webCodecsDecode(m); }
+    // edit list: both ADTS and WebCodecs output still contain the encoder priming (1686 samples here) → drop it so audio lines up with the video
+    const skip = Math.round(m.skip / m.timescale * 44100), lead = Math.round(m.leadSec * 44100);
+    const chs = d.numberOfChannels > 1 ? [d.getChannelData(0), d.getChannelData(1)] : [d.getChannelData(0), d.getChannelData(0)];
+    return chs.map((x) => { const y = new Float32Array(Math.max(0, x.length - skip) + lead); y.set(x.subarray(Math.min(skip, x.length)), lead); return y; });
+  }
   async function decodeFile() {
     if (L) return;
-    const buf = await srcFile.arrayBuffer();
-    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-    const ctx = new OAC(2, 1, 44100);
-    const d = await new Promise((res, rej) => { const p = ctx.decodeAudioData(buf, res, rej); if (p && p.then) p.then(res, rej); });
-    const n = Math.min(d.length, Math.floor(MAX_SECONDS * 44100));
-    L = d.getChannelData(0).slice(0, n); R = (d.numberOfChannels > 1 ? d.getChannelData(1) : d.getChannelData(0)).slice(0, n);
+    const box = /\.(mov|mp4|m4v|m4a)$/i.test(srcFile.name || '') || /^video\/(quicktime|mp4|x-m4v)$|^audio\/(mp4|x-m4a)$/i.test(srcFile.type || '');
+    let d = null, first = null, ch = null;
+    try { d = await decodeAudio(await srcFile.arrayBuffer(), box ? 15000 : 0); } catch (e) { first = e; }
+    if (d) ch = [d.getChannelData(0), d.numberOfChannels > 1 ? d.getChannelData(1) : d.getChannelData(0)];
+    else if (box) { try { ch = await decodeContainer(await srcFile.arrayBuffer()); } catch (e) { throw first || e; } }
+    else throw first || new Error('decode');
+    const n = Math.min(ch[0].length, Math.floor(MAX_SECONDS * 44100));
+    L = ch[0].slice(0, n); R = ch[1].slice(0, n);
   }
   const keyOf = (a, o) => a + '|' + o + '|' + samples.signature();
   let pendingReject = null;
   function runProcess(analysis, audio, onProgress) {
     return new Promise((resolve, reject) => {
       const my = ++job; pendingReject = reject;
-      if (!worker) worker = new Worker('worker.js?v=20261118revert');
+      if (!worker) worker = new Worker('worker.js?v=20261118mov');
       worker.onmessage = (e) => {
         const m = e.data; if (my !== job) return;
         if (m.type === 'progress') onProgress(m.value, m.label);
@@ -653,14 +687,14 @@ const live = (() => {
       track.onended = () => stop('マイクが外れたので停止しました。つなぎ直してから「開始」を押してください。');
       devHandler = () => stop('マイクの接続が変わったので停止しました。もう一度「開始」を押してください。');
       if (navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', devHandler);
-      worker = new Worker('worker.js?v=20261118revert'); tl = new C.GaugeTimeline([], C.defaultRange(), false); tl.frames = [];
+      worker = new Worker('worker.js?v=20261118mov'); tl = new C.GaugeTimeline([], C.defaultRange(), false); tl.frames = [];
       worker.onmessage = (e) => { const m = e.data; if (m.type === 'liveFrames' && m.gen === my && running) tl.append(m.frames.map(([hz, register]) => ({ hz, register }))); };
       worker.postMessage({ type: 'liveStart', rate: ctx.sampleRate, personal: samples.personal() });
       src = ctx.createMediaStreamSource(stream);
       const sink = ctx.createGain(); sink.gain.value = 0; sink.connect(ctx.destination);
       const send = (buf) => { if (running && my === gen) worker.postMessage({ type: 'livePush', samples: buf, gen: my }, [buf.buffer]); };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261118revert');
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261118mov');
         if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => send(e.data);
@@ -872,7 +906,7 @@ const rec = (() => {
         $('recLevelBar').style.width = Math.min(100, Math.round(Math.sqrt(peak) * 140)) + '%';
         if (phase === 'rec') { chunks.push(buf); got += buf.length; if (got >= limit * ctx.sampleRate) finish(); } };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261118revert'); if (my !== gen) return;
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261118mov'); if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => onChunk(e.data);
       } else { node = ctx.createScriptProcessor(2048, 1, 1); node.onaudioprocess = (e) => onChunk(new Float32Array(e.inputBuffer.getChannelData(0))); }
@@ -1029,7 +1063,7 @@ const col = (() => {
         $('colLevelBar').style.width = Math.min(100, Math.round(Math.sqrt(peak) * 140)) + '%';
         if (phase === 'rec') { chunks.push(buf); got += buf.length; if (got >= SECONDS * ctx.sampleRate) { got = SECONDS * ctx.sampleRate; finish(); } } };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261118revert'); if (my !== gen) return;
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261118mov'); if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => onChunk(e.data);
       } else { node = ctx.createScriptProcessor(2048, 1, 1); node.onaudioprocess = (e) => onChunk(new Float32Array(e.inputBuffer.getChannelData(0))); }
