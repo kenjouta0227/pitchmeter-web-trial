@@ -648,10 +648,8 @@ const BandRule = {
   targets(register, judgmentVisible, position, vertical) {
     if (!judgmentVisible) return { chest: 1, mix: 1, ura: 1 };
     const at = BandRule.labelPositions(vertical);
-    if (register === REG.falsetto) return { chest: position <= at.chest ? 0 : 1, mix: position <= at.mix ? 0 : 1, ura: 1 };
-    // 2026-11-17: ミックス判定中は上の固定表示（地声・ミックス・裏声）をすべて消す。判定が外れたら元に戻る
-    // 裏声ミックス判定中も同じくすべて消す。地声判定（個人の基準で地声を録ったときだけ出る）は消さない（判定なしと同じ）
-    if (register === REG.mix || register === REG.uraMix) return { chest: 0, mix: 0, ura: 0 };
+    // 2026-11-17 23:13: 地声・裏声・ミックス・裏声ミックスのどの判定中も、固定表示（地声・ミックス・裏声）をすべて消す。判定が外れたら元に戻る
+    if (register === REG.falsetto || register === REG.mix || register === REG.uraMix || register === REG.chest) return { chest: 0, mix: 0, ura: 0 };
     return { chest: 1, mix: 1, ura: 1 };
   },
   fadeSeconds: 0.05,
