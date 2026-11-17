@@ -275,7 +275,7 @@ const file = (() => {
   function runProcess(analysis, audio, onProgress) {
     return new Promise((resolve, reject) => {
       const my = ++job; pendingReject = reject;
-      if (!worker) worker = new Worker('worker.js');
+      if (!worker) worker = new Worker('worker.js?v=20261117rec');
       worker.onmessage = (e) => {
         const m = e.data; if (my !== job) return;
         if (m.type === 'progress') onProgress(m.value, m.label);
@@ -653,14 +653,14 @@ const live = (() => {
       track.onended = () => stop('マイクが外れたので停止しました。つなぎ直してから「開始」を押してください。');
       devHandler = () => stop('マイクの接続が変わったので停止しました。もう一度「開始」を押してください。');
       if (navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', devHandler);
-      worker = new Worker('worker.js'); tl = new C.GaugeTimeline([], C.defaultRange(), false); tl.frames = [];
+      worker = new Worker('worker.js?v=20261117rec'); tl = new C.GaugeTimeline([], C.defaultRange(), false); tl.frames = [];
       worker.onmessage = (e) => { const m = e.data; if (m.type === 'liveFrames' && m.gen === my && running) tl.append(m.frames.map(([hz, register]) => ({ hz, register }))); };
       worker.postMessage({ type: 'liveStart', rate: ctx.sampleRate, personal: samples.personal() });
       src = ctx.createMediaStreamSource(stream);
       const sink = ctx.createGain(); sink.gain.value = 0; sink.connect(ctx.destination);
       const send = (buf) => { if (running && my === gen) worker.postMessage({ type: 'livePush', samples: buf, gen: my }, [buf.buffer]); };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js');
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261117rec');
         if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => send(e.data);
@@ -872,7 +872,7 @@ const rec = (() => {
         $('recLevelBar').style.width = Math.min(100, Math.round(Math.sqrt(peak) * 140)) + '%';
         if (phase === 'rec') { chunks.push(buf); got += buf.length; if (got >= limit * ctx.sampleRate) finish(); } };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js'); if (my !== gen) return;
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261117rec'); if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => onChunk(e.data);
       } else { node = ctx.createScriptProcessor(2048, 1, 1); node.onaudioprocess = (e) => onChunk(new Float32Array(e.inputBuffer.getChannelData(0))); }
