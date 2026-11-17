@@ -58,6 +58,45 @@ function modal(el, onClose) {
 }
 document.addEventListener('keydown', (e) => { if (e.key !== 'Escape') return; for (const [id, m] of Array.from(modals).reverse()) if (!$(id).hidden) { e.preventDefault(); m.requestClose(); break; } });
 
+// ---------- サンプル音声（声の種類ごとの判定基準）: この端末の localStorage にだけ保存。音声そのものは保存も送信もしない ----------
+// 保存するのは特徴量（f0・hrich・cpp8k・息漏れ）だけ。適用スイッチがオフ、またはサンプルが無いときは判定は公開中の既定と完全に同じ。
+const samples = (() => {
+  const KEY = 'pm.voiceSamples.v1', APPLY = 'pm.voiceSamples.apply';
+  const CATS = [
+    { k: 'chest', name: '地声', guideNote: '地声でいちばん低い音から、ミックスに変わる直前まで' },
+    { k: 'mix', name: 'ミックス', guideNote: 'ミックスボイスに変わったところから、裏声に変わる直前まで' },
+    { k: 'ura', name: '裏声', guideNote: '裏声に変わったところから上（息まじりの裏声もここ）' },
+    { k: 'uramix', name: '裏声ミックス', guideNote: 'ヘッドボイス寄りの、張りがあって息もれの少ない高い声' },
+  ];
+  let data = {}, apply = true, cache = null, cacheSig = '';
+  try { data = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { data = {}; }
+  try { const a = localStorage.getItem(APPLY); apply = a === null ? true : a === '1'; } catch (e) {}
+  for (const k of Object.keys(data)) if (!CATS.some(c => c.k === k) || !data[k] || !Array.isArray(data[k].frames) || !data[k].frames.length) delete data[k];
+  const listeners = [];
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(data)); return true; } catch (e) { return false; } };
+  const changed = () => { cache = null; cacheSig = ''; listeners.forEach(f => { try { f(); } catch (e) {} }); };
+  const api = {
+    CATS, nameOf: (k) => (CATS.find(c => c.k === k) || {}).name || k,
+    get: (k) => data[k] || null,
+    any: () => Object.keys(data).length > 0,
+    applied: () => apply && Object.keys(data).length > 0,
+    applyOn: () => apply,
+    setApply(v) { apply = !!v; try { localStorage.setItem(APPLY, apply ? '1' : '0'); } catch (e) {} changed(); },
+    put(k, rec) { const first = !api.any(); data[k] = rec; if (!save()) { delete data[k]; return false; } if (first) { apply = true; try { localStorage.setItem(APPLY, '1'); } catch (e) {} } changed(); return true; },
+    remove(k) { delete data[k]; save(); changed(); },
+    clear() { data = {}; try { localStorage.removeItem(KEY); localStorage.removeItem(APPLY); } catch (e) {} apply = true; changed(); },
+    /** 判定に渡す個人パラメータ。適用オフ・サンプル無しのときは null（＝既定の判定）。 */
+    personal() {
+      if (!api.applied()) return null;
+      const sig = api.signature(); if (cache && cacheSig === sig) return cache;
+      try { cache = C.buildCalibration(data); } catch (e) { cache = null; } cacheSig = sig; return cache;
+    },
+    signature: () => api.applied() ? Object.keys(data).sort().map(k => k + ':' + data[k].at).join(',') : 'default',
+    onChange: (f) => listeners.push(f),
+  };
+  return api;
+})();
+
 // ---------- ⓘ 説明（StudioInformationModal / operationDetails） ----------
 const INFO = {
   '利用回数': '解析は消費なし。月次試用は新しいファイルの書き出し成功時に1回消費します。\n（ウェブ試作版は回数を消費しません。）',
@@ -231,7 +270,7 @@ const file = (() => {
     const n = Math.min(d.length, Math.floor(MAX_SECONDS * 44100));
     L = d.getChannelData(0).slice(0, n); R = (d.numberOfChannels > 1 ? d.getChannelData(1) : d.getChannelData(0)).slice(0, n);
   }
-  const keyOf = (a, o) => a + '|' + o;
+  const keyOf = (a, o) => a + '|' + o + '|' + samples.signature();
   let pendingReject = null;
   function runProcess(analysis, audio, onProgress) {
     return new Promise((resolve, reject) => {
@@ -244,7 +283,7 @@ const file = (() => {
         else if (m.type === 'error') reject(new Error(m.message));
       };
       worker.onerror = (ev) => { if (my === job) reject(new Error('worker')); };
-      worker.postMessage({ type: 'process', id: my, L, R, analysis, audio });
+      worker.postMessage({ type: 'process', id: my, L, R, analysis, audio, personal: samples.personal() });
     });
   }
   function cancelTask() { job++; if (worker) { worker.terminate(); worker = null; } if (exporter.active()) exporter.cancel(); if (pendingReject) { const r = pendingReject; pendingReject = null; r(new Error('cancelled')); } }
@@ -616,7 +655,7 @@ const live = (() => {
       if (navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', devHandler);
       worker = new Worker('worker.js'); tl = new C.GaugeTimeline([], C.defaultRange(), false); tl.frames = [];
       worker.onmessage = (e) => { const m = e.data; if (m.type === 'liveFrames' && m.gen === my && running) tl.append(m.frames.map(([hz, register]) => ({ hz, register }))); };
-      worker.postMessage({ type: 'liveStart', rate: ctx.sampleRate });
+      worker.postMessage({ type: 'liveStart', rate: ctx.sampleRate, personal: samples.personal() });
       src = ctx.createMediaStreamSource(stream);
       const sink = ctx.createGain(); sink.gain.value = 0; sink.connect(ctx.destination);
       const send = (buf) => { if (running && my === gen) worker.postMessage({ type: 'livePush', samples: buf, gen: my }, [buf.buffer]); };
@@ -679,19 +718,89 @@ const live = (() => {
 })();
 
 // ======================= サンプル音声を追加（録音シート） =======================
-// マイク音声はこの端末のメモリだけ。WAVにして素材分析（file.choose）と同じ解析経路へ渡す。送信・保存はしない。
+// 「地声を録る」「ミックスを録る」「裏声を録る」「裏声ミックスを録る」: マイク音声はこの端末のメモリだけで特徴量に変換し、
+// 特徴量だけを localStorage に保存する（音声は保存しない・どこにも送らない）。結果は押した行の「開始」のすぐ下に出す。
+// 「録音してそのまま素材分析する」は従来どおり WAV にして素材分析（file.choose）へ渡す（保存・送信なし）。
 const rec = (() => {
-  const SECONDS = 5, COUNT = 3;
-  let phase = 'idle', ctx = null, stream = null, node = null, src = null, gen = 0, chunks = [], got = 0, timer = 0, startAt = 0, peak = 0;
-  const btn = $('recBtn');
+  const COUNT = 3, MAX_SECONDS = 20, QUICK_SECONDS = 5;
+  let phase = 'idle', target = null, ctx = null, stream = null, node = null, src = null, gen = 0, chunks = [], got = 0, timer = 0, startAt = 0, peak = 0;
+  const results = {}; // k -> { kind: 'ok'|'err'|'info', text }
+  const btn = $('recBtn'), panel = $('recPanel');
   const msg = (s) => { $('recMsg').textContent = s || ''; };
   const count = (s) => { $('recCount').textContent = s; };
   const state = (s) => { $('recState').textContent = s; };
+  const nm = (k) => samples.nameOf(k);
+  const hzName = (hz) => { const m = 69 + 12 * Math.log2(hz / 440); return `${C.doremi(m)}（${Math.round(hz)} Hz）`; };
+  const range = (r) => (r && r.minF0 > 0) ? `${C.doremi(69 + 12 * Math.log2(r.minF0 / 440))}〜${C.doremi(69 + 12 * Math.log2(r.maxF0 / 440))}（${Math.round(r.minF0)}〜${Math.round(r.maxF0)} Hz）` : '';
+  const guide = (k) => { const g = C.guideNotes(k, 0); return g.length ? `目安 ${hzName(g[0].hz)} 〜 ${hzName(g[g.length - 1].hz)}` : ''; };
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  function criterionLine(k) {
+    const r = samples.get(k); if (!r) return '';
+    return samples.applyOn() ? `${nm(k)}の判定基準: あなたの声（適用中）` : `${nm(k)}の判定基準: 既定（「サンプル音声を適用」がオフ）`;
+  }
+  function savedText(k) { const r = samples.get(k); return r ? `声が出ていた時間 ${r.voicedSeconds.toFixed(1)}秒・${range(r)}\n${criterionLine(k)}` : ''; }
+  function renderList() {
+    const list = $('smpList');
+    if (!list.children.length) {
+      for (const c of samples.CATS) {
+        const row = document.createElement('div'); row.className = 'smp-row'; row.id = 'smpRow-' + c.k;
+        row.innerHTML = `<div class="smp-head"><div class="smp-name">${esc(c.name)}を録る</div><span class="spacer"></span>`
+          + `<span class="smp-badge" id="smpBadge-${c.k}"></span><button class="btn primary smp-start" id="smpStart-${c.k}" aria-describedby="smpRes-${c.k}">開始</button></div>`
+          + `<div class="smp-guide">${esc(c.guideNote)}<br>${esc(guide(c.k))}</div>`
+          + `<p class="smp-res" id="smpRes-${c.k}" aria-live="polite"></p><button class="linkbtn smp-del" id="smpDel-${c.k}" hidden>この${esc(c.name)}のサンプルを削除</button>`;
+        list.appendChild(row);
+        $('smpStart-' + c.k).onclick = () => { if (phase === 'idle') start(c.k); };
+        $('smpDel-' + c.k).onclick = () => { if (phase !== 'idle') return; samples.remove(c.k); results[c.k] = { kind: 'info', text: `${c.name}のサンプルを削除しました。${c.name}は既定の判定基準に戻りました。` }; render(); };
+      }
+    }
+    for (const c of samples.CATS) {
+      const r = samples.get(c.k), res = results[c.k], el = $('smpRes-' + c.k), busy = phase !== 'idle';
+      const badge = $('smpBadge-' + c.k); badge.textContent = r ? (samples.applyOn() ? 'あなたの声' : '登録済み（オフ）') : '未登録'; badge.classList.toggle('off', !(r && samples.applyOn()));
+      const sb = $('smpStart-' + c.k); sb.textContent = r ? '録り直す' : '開始'; sb.disabled = busy; sb.setAttribute('aria-label', `${c.name}を${r ? '録り直す' : '録る（開始）'}`);
+      $('smpDel-' + c.k).hidden = !r || busy; $('smpRow-' + c.k).classList.toggle('active', target === c.k && busy);
+      el.className = 'smp-res';
+      if (res && res.kind === 'ok') { el.classList.add('ok'); el.innerHTML = `<b>${esc(res.text)}</b>\n${esc(savedText(c.k))}`; }
+      else if (res && res.kind === 'err') { el.classList.add('err'); el.textContent = res.text + (r ? `\n（前に録った${c.name}のサンプルはそのまま使っています）` : ''); }
+      else if (res && res.kind === 'info') { el.textContent = res.text; }
+      else el.textContent = r ? savedText(c.k) : 'まだ録っていません。いまは既定の判定基準です。';
+    }
+  }
+  function renderApply() {
+    const any = samples.any(), on = samples.applyOn();
+    for (const id of ['smpApply', 'smpApplyMain']) { const i = $(id); i.checked = on; i.setAttribute('aria-checked', on ? 'true' : 'false'); i.disabled = !any; }
+    $('smpApplyRow').hidden = !any; $('smpApplyDesc').hidden = !any; $('smpReset').hidden = !any || phase !== 'idle';
+    $('smpApplyDesc').textContent = on ? 'オン: 録ったサンプル音声で判定します（リアルタイム・素材分析の両方）。' : 'オフ: いつもの既定の判定に戻っています。サンプルは消えていません。';
+    // 「サンプル音声を追加」ボタンのすぐ下の結果表示
+    $('smpSummary').hidden = !any;
+    if (any) {
+      const have = samples.CATS.filter(c => samples.get(c.k)).map(c => c.name), last = samples.CATS.map(c => ({ c, r: samples.get(c.k) })).filter(x => x.r).sort((x, y) => y.r.at - x.r.at)[0];
+      const lines = [`登録済み: ${have.join('・')}（${have.length}/4）`];
+      if (last) lines.push(`最後に反映: ${last.c.name}・${last.r.voicedSeconds.toFixed(1)}秒・${range(last.r)}`);
+      lines.push(on ? '判定はあなたの声の基準を使っています。' : '判定はいつもの既定に戻っています（サンプルは保存したまま）。');
+      $('smpSumText').textContent = lines.join('\n');
+    }
+  }
+  function render() { renderList(); renderApply(); }
+  samples.onChange(renderApply);
+  const onToggle = (e) => { samples.setApply(e.target.checked); render(); msg(''); };
+  $('smpApply').onchange = onToggle; $('smpApplyMain').onchange = onToggle;
+  $('smpReset').onclick = () => {
+    if (phase !== 'idle') return;
+    if (!window.confirm('録ったサンプル音声（地声・ミックス・裏声・裏声ミックス）をすべて削除して、既定の判定基準に戻しますか？')) return;
+    samples.clear(); for (const k in results) delete results[k]; render(); msg('初期設定に戻しました。判定はいつもの既定の基準です。');
+  };
   function ui() {
+    const rec = phase === 'rec';
     btn.classList.toggle('recording', phase !== 'idle');
-    $('recBtnText').textContent = phase === 'idle' ? '録音する' : phase === 'rec' ? '停止' : 'やめる';
-    btn.setAttribute('aria-label', phase === 'idle' ? '録音する' : phase === 'rec' ? '録音を停止して解析' : '録音をやめる');
-    if (phase === 'idle') { count(String(SECONDS)); state('約5秒で自動で止まります'); $('recLevelBar').style.width = '0%'; }
+    $('recBtnText').textContent = target === 'quick' ? (rec ? '停止して分析' : 'やめる') : (rec ? '録音を終える' : phase === 'analyze' ? '解析中…' : 'やめる');
+    btn.disabled = phase === 'analyze';
+    btn.setAttribute('aria-label', rec ? '録音を終える' : '録音をやめる');
+    panel.hidden = phase === 'idle';
+    const sheet = $('recSheet').querySelector('.rec-sheet'), row = (phase !== 'idle' && target !== 'quick') ? $('smpRow-' + target) : null;
+    if (phase === 'idle') $('recLevelBar').style.width = '0%';
+    if (row) row.insertBefore(panel, $('smpRes-' + target)); else sheet.insertBefore(panel, $('recMsg')); // 録音表示は押した行の中
+    $('recQuick').disabled = phase !== 'idle';
+    render();
   }
   function teardown() {
     gen++; clearInterval(timer); timer = 0;
@@ -700,35 +809,56 @@ const rec = (() => {
     if (ctx) { try { ctx.close(); } catch (e) {} }
     stream = null; node = null; src = null; ctx = null; setAudioSession('playback');
   }
-  function fail(m) { teardown(); chunks = []; phase = 'idle'; ui(); msg(m); }
-  function cancel() { if (phase === 'idle') return; teardown(); chunks = []; phase = 'idle'; ui(); }
+  function fail(m) { const k = target; teardown(); chunks = []; phase = 'idle'; target = null; if (k && k !== 'quick') { results[k] = { kind: 'err', text: m }; msg(''); } else msg(m); ui(); }
+  function cancel() { if (phase === 'idle') return; teardown(); chunks = []; phase = 'idle'; target = null; ui(); }
   const m = modal($('recSheet'), () => close());
-  function open() { msg(''); phase = 'idle'; ui(); m.open('recBtn'); }
+  function open() { msg(''); phase = 'idle'; target = null; for (const k in results) if (results[k].kind !== 'ok') delete results[k]; ui(); m.open(); }
   function close() { cancel(); m.close(); }
-  function wav(samples, rate) {
-    const n = samples.length, b = new ArrayBuffer(44 + n * 2), v = new DataView(b); const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  function wav(samplesF, rate) {
+    const n = samplesF.length, b = new ArrayBuffer(44 + n * 2), v = new DataView(b); const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
     w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
     v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
-    for (let i = 0; i < n; i++) { const x = Math.max(-1, Math.min(1, samples[i])); v.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true); }
+    for (let i = 0; i < n; i++) { const x = Math.max(-1, Math.min(1, samplesF[i])); v.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true); }
     return new Blob([b], { type: 'audio/wav' });
+  }
+  /** 録った音声（メモリ上）→ 特徴量。音声はここで捨てる。 */
+  function capture(k, all, rate) {
+    let r; try { r = C.calibrationFrames(all, rate, k); } catch (e) { return { err: '解析できませんでした。もう一度「開始」を押してください。' }; }
+    if (!r.ok) return { err: `声が十分に取れませんでした（声が出ていた時間 ${r.voicedSeconds.toFixed(1)}秒・2秒以上必要です）。${k === 'chest' ? '' : '高さが150 Hzより低いと使えません。'}もう少し長く、はっきりのばしてください。` };
+    const f0 = r.frames.map(x => x[0]).sort((a, b) => a - b), q = (p) => f0[Math.min(f0.length - 1, Math.max(0, Math.round(p * (f0.length - 1))))];
+    return { rec: { frames: r.frames, voicedSeconds: Math.round(r.voicedSeconds * 10) / 10, medianF0: Math.round(r.medianF0 * 10) / 10, minF0: Math.round(q(0.05) * 10) / 10, maxF0: Math.round(q(0.95) * 10) / 10, at: Date.now(), v: C.CAL.version } };
   }
   function finish() {
     if (phase !== 'rec') return;
-    const rate = ctx ? ctx.sampleRate : 48000; teardown(); phase = 'idle'; ui();
-    const all = new Float32Array(got); let o = 0; for (const c of chunks) { all.set(c, o); o += c.length; } chunks = [];
-    if (all.length < rate * 0.5) { msg('録音が短すぎました。もう一度「録音する」を押してください。'); return; }
+    const rate = ctx ? ctx.sampleRate : 48000, k = target; teardown();
+    let all = new Float32Array(got); let o = 0; for (const c of chunks) { all.set(c, o); o += c.length; } chunks = [];
+    const done = (fn) => { phase = 'idle'; target = null; fn(); ui(); };
+    if (all.length < rate * 0.5) { done(() => k === 'quick' ? msg('録音が短すぎました。もう一度押してください。') : (results[k] = { kind: 'err', text: '録音が短すぎました。もう一度「開始」を押してください。' })); return; }
     let sq = 0, pk = 0; for (let i = 0; i < all.length; i++) { const x = all[i]; sq += x * x; if (Math.abs(x) > pk) pk = Math.abs(x); }
-    if (pk < 0.01 || 10 * Math.log10(sq / all.length + 1e-20) < -55) { msg('声が小さくて聞き取れませんでした。マイクに近づいて、もう少し大きめに録ってください。'); return; }
-    const d = new Date(), name = `サンプル音声 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}.wav`;
-    let f; try { f = new File([wav(all, rate)], name, { type: 'audio/wav' }); } catch (e) { f = wav(all, rate); f.name = name; }
-    m.close(false);
-    file.choose(f);
-    requestAnimationFrame(() => { const ec = $('editCard'); if (ec && ec.scrollIntoView) ec.scrollIntoView({ block: 'start', behavior: 'smooth' }); });
+    if (pk < 0.01 || 10 * Math.log10(sq / all.length + 1e-20) < -55) { const t = '声が小さくて聞き取れませんでした。マイクに近づいて、もう少し大きめに録ってください。'; done(() => k === 'quick' ? msg(t) : (results[k] = { kind: 'err', text: t })); return; }
+    if (k === 'quick') {
+      const d = new Date(), name = `サンプル音声 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}.wav`;
+      let f; try { f = new File([wav(all, rate)], name, { type: 'audio/wav' }); } catch (e) { f = wav(all, rate); f.name = name; }
+      phase = 'idle'; target = null; ui(); m.close(false); file.choose(f);
+      requestAnimationFrame(() => { const ec = $('editCard'); if (ec && ec.scrollIntoView) ec.scrollIntoView({ block: 'start', behavior: 'smooth' }); });
+      return;
+    }
+    phase = 'analyze'; target = k; ui(); count('…'); state('声の特徴を取り出しています（この端末の中だけ）');
+    setTimeout(() => {
+      const out = capture(k, all, rate); all = null;
+      done(() => {
+        if (out.err) results[k] = { kind: 'err', text: out.err };
+        else if (!samples.put(k, out.rec)) results[k] = { kind: 'err', text: '端末に保存できませんでした（ブラウザの保存領域がいっぱいか、プライベートブラウズの可能性があります）。' };
+        else results[k] = { kind: 'ok', text: `${nm(k)}のサンプルを反映しました` };
+      });
+      const sb = $('smpStart-' + k); if (sb) sb.focus({ preventScroll: true });
+    }, 30);
   }
-  async function start() {
-    msg(''); phase = 'prep'; ui(); count('…'); state('マイクを準備しています'); const my = ++gen;
+  async function start(k) {
+    target = k; delete results[k]; msg(''); phase = 'prep'; ui(); count('…'); state('マイクを準備しています'); const my = ++gen;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.isSecureContext) { fail('このブラウザではマイクを使えません（https で開いてください）。'); return; }
     try { live.stop(); } catch (e) {}
+    const limit = k === 'quick' ? QUICK_SECONDS : MAX_SECONDS;
     try {
       setAudioSession('play-and-record');
       const AC = window.AudioContext || window.webkitAudioContext; ctx = new AC();
@@ -740,7 +870,7 @@ const rec = (() => {
       const sink = ctx.createGain(); sink.gain.value = 0; sink.connect(ctx.destination);
       const onChunk = (buf) => { if (my !== gen) return; let p = 0; for (let i = 0; i < buf.length; i++) { const a = Math.abs(buf[i]); if (a > p) p = a; } peak = Math.max(p, peak * 0.85);
         $('recLevelBar').style.width = Math.min(100, Math.round(Math.sqrt(peak) * 140)) + '%';
-        if (phase === 'rec') { chunks.push(buf); got += buf.length; if (got >= SECONDS * ctx.sampleRate) finish(); } };
+        if (phase === 'rec') { chunks.push(buf); got += buf.length; if (got >= limit * ctx.sampleRate) finish(); } };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
         await ctx.audioWorklet.addModule('capture-worklet.js'); if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
@@ -748,22 +878,29 @@ const rec = (() => {
       } else { node = ctx.createScriptProcessor(2048, 1, 1); node.onaudioprocess = (e) => onChunk(new Float32Array(e.inputBuffer.getChannelData(0))); }
       src.connect(node); node.connect(sink);
       ctx.onstatechange = () => { if (ctx && ctx.state === 'interrupted') fail('ほかの音声で中断されたので録音をやめました。'); };
-      phase = 'count'; ui(); let left = COUNT; count(String(left)); state('まもなく録音が始まります。低い裏声から準備してください');
+      const what = k === 'quick' ? '声' : nm(k);
+      phase = 'count'; ui(); let left = COUNT; count(String(left)); state(`まもなく録音が始まります。${what}で準備してください`);
       timer = setInterval(() => { if (my !== gen) return;
         if (phase === 'count') { left--; if (left > 0) { count(String(left)); return; }
-          phase = 'rec'; chunks = []; got = 0; startAt = performance.now(); ui(); count(String(SECONDS)); state('録音中… 低い裏声 → 高い裏声へ'); return; }
-        if (phase === 'rec') { count(String(Math.max(0, SECONDS - Math.floor((performance.now() - startAt) / 1000))));
-          if (performance.now() - startAt > SECONDS * 1000 + 1500) finish(); } }, 1000);
+          phase = 'rec'; chunks = []; got = 0; startAt = performance.now(); ui(); count('0秒');
+          state(k === 'quick' ? '録音中… 5秒で自動で止まります' : `録音中… ${what}で「あー」か「うー」。低い音から高い音へ（最長${MAX_SECONDS}秒）`); return; }
+        if (phase === 'rec') { const el = Math.floor((performance.now() - startAt) / 1000); count(k === 'quick' ? String(Math.max(0, QUICK_SECONDS - el)) : el + '秒');
+          if (performance.now() - startAt > limit * 1000 + 1500) finish(); } }, 1000);
     } catch (e) {
       if (my !== gen) return;
       const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
       fail(denied ? 'マイクが許可されていません。ブラウザの設定でマイクを許可してから、もう一度押してください。' : (e && e.name === 'NotFoundError' ? 'マイクが見つかりませんでした。' : '録音を開始できませんでした。もう一度試してください。'));
     }
   }
-  btn.onclick = () => { if (phase === 'idle') start(); else if (phase === 'rec') finish(); else cancel(); };
+  btn.onclick = () => { if (phase === 'rec') finish(); else if (phase === 'count' || phase === 'prep') cancel(); };
+  $('recQuick').onclick = () => { if (phase === 'idle') start('quick'); };
   $('sampleBtn').onclick = open;
   $('recClose').onclick = close;
   document.addEventListener('visibilitychange', () => { if (document.hidden) cancel(); });
+  render();
+  // テスト用（ヘッドレス確認）: 実際のマイクの代わりに音声配列を渡して同じ処理を通す。?smptest のときだけ。
+  if (/[?&]smptest\b/.test(location.search)) window.__pmSampleTest = { capture: (k, mono, rate) => { const o = capture(k, mono, rate); if (o.rec) { samples.put(k, o.rec); results[k] = { kind: 'ok', text: `${nm(k)}のサンプルを反映しました` }; } else results[k] = { kind: 'err', text: o.err }; render(); return o; },
+    personal: () => samples.personal(), open, setState: (k, ph) => { target = k; phase = ph; ui(); count(ph === 'rec' ? '4秒' : '3'); state(ph === 'rec' ? `録音中… ${nm(k)}で「あー」か「うー」。低い音から高い音へ（最長${MAX_SECONDS}秒）` : `まもなく録音が始まります。${nm(k)}で準備してください`); $('recLevelBar').style.width = '55%'; }, reset: () => { phase = 'idle'; target = null; ui(); } };
   return { cancel: close };
 })();
 

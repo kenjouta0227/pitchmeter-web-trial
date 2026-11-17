@@ -65,6 +65,12 @@
       <!-- 1つの入力でOK: iOS Safari は「写真ライブラリ / ビデオを撮る / ファイルを選択」の標準メニューを出す -->
       <input type="file" id="fileInput" accept="video/*,audio/*,.mp4,.mov,.m4v,.mp3,.m4a,.wav,.aac,.caf,.aif,.aiff" hidden>
       <button class="sbtn white big" id="sampleBtn"><svg class="ico"><use href="#i-mic"/></svg>サンプル音声を追加</button>
+      <!-- 取り込んだサンプルの結果（ボタンのすぐ下）。サンプルがあるときだけ表示。 -->
+      <div class="smp-summary" id="smpSummary" hidden>
+        <div class="smp-switch-row"><span class="smp-switch-label" id="smpApplyLabelMain">サンプル音声を適用</span><span class="spacer"></span>
+          <label class="switch"><input type="checkbox" role="switch" id="smpApplyMain" aria-labelledby="smpApplyLabelMain"><i></i></label></div>
+        <p class="smp-sum-text" id="smpSumText" aria-live="polite"></p>
+      </div>
     </div>
 
     <!-- editingCard -->
@@ -308,12 +314,21 @@
 <div id="recSheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="recTitle">
   <div class="sheetBody rec-sheet">
     <div class="row"><strong id="recTitle">サンプル音声を追加</strong><span class="spacer"></span><button class="btn small" id="recClose">閉じる</button></div>
-    <p class="rec-instr">低い裏声から高い裏声まで滑らかにつなげて、数秒声を出してください。</p>
-    <div class="rec-count" id="recCount" aria-live="polite">5</div>
-    <div class="rec-state" id="recState">約5秒で自動で止まります</div>
-    <div class="rec-level"><i id="recLevelBar"></i></div>
-    <button class="btn primary big" id="recBtn"><span class="rec-dot" aria-hidden="true"></span><span id="recBtnText">録音する</span></button>
+    <p class="rec-instr">声の種類ごとに「開始」を押して、「あー」か「うー」でのばしてください。録った声はその種類の判定基準になります。音声はこの端末の中だけで特徴に変換して保存し、どこにも送りません。</p>
+    <div class="smp-switch-row card-like" id="smpApplyRow" hidden><span class="smp-switch-label" id="smpApplyLabel">サンプル音声を適用</span><span class="spacer"></span>
+      <label class="switch"><input type="checkbox" role="switch" id="smpApply" aria-labelledby="smpApplyLabel" aria-describedby="smpApplyDesc"><i></i></label></div>
+    <p class="caption smp-apply-desc" id="smpApplyDesc" hidden></p>
+    <div class="smp-list" id="smpList"></div>
+    <!-- 録音中の表示（押した行の中に移動して使う） -->
+    <div class="smp-recorder" id="recPanel" hidden>
+      <div class="rec-count" id="recCount" aria-live="polite">3</div>
+      <div class="rec-state" id="recState"></div>
+      <div class="rec-level"><i id="recLevelBar"></i></div>
+      <button class="btn primary big" id="recBtn"><span class="rec-dot" aria-hidden="true"></span><span id="recBtnText">録音を終える</span></button>
+    </div>
     <p class="rec-msg" id="recMsg" aria-live="polite"></p>
+    <button class="btn small smp-reset" id="smpReset" hidden>初期設定に戻す（サンプルをすべて削除）</button>
+    <button class="linkbtn caption" id="recQuick">録音してそのまま素材分析する（5秒）</button>
   </div>
 </div>
 

@@ -326,7 +326,7 @@ function frameValue(P, f) {
   const gateMin = P ? P.gateMinF0 : RC.gateMinF0;
   if (!(f.f0 > 0)) { // relaxed breathy frame → 裏声 vote only
     const fr = f.relaxedF0;
-    if (fr >= gateMin && fr <= RC.gateMaxF0 && f.rmsDb > RC.gateMinRmsDbfs && f.breathDb >= (P && isFinite(P.breathyDb) ? P.breathyDb : RC.relaxedBreathMin) && f.breathDb <= RC.relaxedBreathMax) return CAL.BREATHY;
+    if (fr >= gateMin && fr <= RC.gateMaxF0 && f.rmsDb > RC.gateMinRmsDbfs && f.breathDb >= (P && isFinite(P.breathyDb) ? Math.max(RC.relaxedBreathMin, P.breathyDb) : RC.relaxedBreathMin) && f.breathDb <= RC.relaxedBreathMax) return CAL.BREATHY;
     return null;
   }
   if (!P) return RegisterClassifier.isValid(f) ? RegisterClassifier.probabilityFalsetto(f) : null;
@@ -336,11 +336,11 @@ function frameValue(P, f) {
 // ---------------- Personal calibration (「地声を録る」「ミックスを録る」「裏声ミックスを録る」「裏声を録る」) ----------------
 // Recordings are reduced on the device to per-frame features [f0 Hz, hrichDb, cpp8k, breathDb, targetHz]; no raw audio is kept.
 const CAL = {
-  // enabled:false = no UI/worker wiring yet (recording screen postponed 2026-11-17). Judging only uses this code when a
-  // personal params object is passed to analyzeMono/attachRegister/LivePitchStream; app.js and worker.js never pass one.
-  enabled: false, version: 2, CHEST: 2, BREATHY: 3, // smoother markers (p values are 0…1)
+  // enabled (2026-11-17): app.js passes buildCalibration(samples) only when samples exist AND 「サンプル音声を適用」 is on;
+  // otherwise personal = null and judging is exactly the published default.
+  enabled: true, version: 2, CHEST: 2, BREATHY: 3, // smoother markers (p values are 0…1)
   chestMinHz: 80, sampleMinHz: 150, sampleMaxHz: 1000, minVoicedSeconds: 2.0, maxFrames: 900, targetToleranceSemis: 3,
-  margin: 1.0, maxShift: 8.0, lambda: 0.01, fitIters: 40, quantLow: 0.1, quantHigh: 0.9, headMargin: 0.5, minNoteFrames: 10, minBand: 0.4,
+  margin: 1.0, maxShift: 8.0, lambda: 0.01, fitIters: 40, quantLow: 0.1, quantHigh: 0.9, headMargin: 0.5, tailLow: 0.02, tailHigh: 0.98, uramixLowMargin: 0.0, minNoteFrames: 10, minBand: 0.4,
   splitMinDb: -45.0, splitMaxDb: -25.0, floorRatio: 0.94, floorQuantile: 0.05, minGateHz: 150, breathSplitMinDb: 3.0,
   scaleFloor: [3.0, 0.5, 6.0], chestMaxDistAlone: 2.0, chestMaxDist: 3.0,
   categories: ['chest', 'mix', 'uramix', 'ura'],
@@ -422,13 +422,23 @@ function buildCalibration(samples) {
   else if (M) { const q = quantile(zs(M, th), CAL.quantHigh); th[0] -= Math.min(CAL.maxShift, Math.max(0, q - (Lm - mg))); method = 'shift-mix'; }
   // ---- edges on the z axis (global, then per guide note) ----
   const zOf = (F) => zs(F, th), med = (a) => quantile(a, 0.5);
+  // Edges between recorded categories sit in the gap between their tails (2 % / 98 %), so each recording keeps its own
+  // label; 裏声ミックス stays the narrow, ambiguous zone (「あいまいなところだけ」): without a 裏声ミックス recording it is the
+  // middle third of the 裏声|ミックス gap, with one its ミックス-side edge stays near that recording's low tail.
+  const tLo = (a) => quantile(a, CAL.tailLow), tHi = (a) => quantile(a, CAL.tailHigh);
   const edgesFor = (u, h, m) => { // u/h/m: z arrays (or null) of 裏声 / 裏声ミックス / ミックス
     let up = Lf, lo = Lm;
     if (h) {
       const mh = med(h);
-      if (u && med(u) > mh) up = (med(u) + mh) / 2; else if (!u) up = Math.max(Lf, quantile(h, 0.9) + CAL.headMargin);
-      if (m && mh > med(m)) lo = (mh + med(m)) / 2; else if (!m) lo = Math.min(Lm, quantile(h, 0.1) - CAL.headMargin);
-    } else if (u && m) { const c = (med(u) + med(m)) / 2, mid = (Lf + Lm) / 2; up = Lf + (c - mid); lo = Lm + (c - mid); }
+      if (u) { const a = tLo(u), b = tHi(h); if (a > b) up = (a + b) / 2; else if (med(u) > mh) up = (med(u) + mh) / 2; }
+      else up = Math.max(Lf, quantile(h, 0.9) + CAL.headMargin);
+      if (m) { const a = tLo(h), b = tHi(m); if (a > b) lo = Math.max((a + b) / 2, quantile(h, 0.05) - CAL.uramixLowMargin); else if (mh > med(m)) lo = (mh + med(m)) / 2; }
+      else lo = Math.min(Lm, quantile(h, 0.1) - CAL.headMargin);
+    } else if (u && m) {
+      const a = tLo(u), b = tHi(m);
+      if (a > b) { lo = b + (a - b) / 3; up = a - (a - b) / 3; }
+      else { const c = (med(u) + med(m)) / 2, mid = (Lf + Lm) / 2; up = Lf + (c - mid); lo = Lm + (c - mid); }
+    }
     if (up - lo < CAL.minBand) { const c = (up + lo) / 2; up = c + CAL.minBand / 2; lo = c - CAL.minBand / 2; }
     return [up, lo];
   };
@@ -436,7 +446,7 @@ function buildCalibration(samples) {
   if (H && !order(zOf(H), U && zOf(U), M && zOf(M))) quality = 'uramix-order';
   const [gUp, gLo] = (H && quality === 'uramix-order') ? edgesFor(null, null, null) : edgesFor(U && zOf(U), H && zOf(H), M && zOf(M));
   const table = []; // [log2 Hz, up, lo] where ≥2 categories were recorded on the same guide note
-  { const by = {}; const add = (F, k) => { if (F) for (const r of F) { const n = noteKey(r); (by[n] = by[n] || { ura: [], uramix: [], mix: [] })[k].push(r); } };
+  { const by = {}; const add = (F, k) => { if (F) for (const r of F) { if (!r[4]) continue; /* guide-note recordings only */ const n = noteKey(r); (by[n] = by[n] || { ura: [], uramix: [], mix: [] })[k].push(r); } };
     add(U, 'ura'); add(H, 'uramix'); add(M, 'mix');
     for (const n of Object.keys(by).map(Number).sort((a, b) => a - b)) {
       const g = by[n], ok = (k) => g[k].length >= CAL.minNoteFrames ? zOf(g[k]) : null, u = ok('ura'), h = ok('uramix'), m = ok('mix');
@@ -450,9 +460,10 @@ function buildCalibration(samples) {
   let breathyDb = RC.breathyDb, cleanDb = RC.cleanDb;
   const bmed = (F) => { const b = F.map(r => r[3]).filter(v => v !== null && isFinite(v)); return b.length ? med(b) : NaN; };
   let split = false;
-  if (U && H) { const bu = bmed(U), bh = bmed(H); if (bu - bh >= CAL.breathSplitMinDb) { breathyDb = Math.min(CAL.splitMaxDb, Math.max(CAL.splitMinDb, (bu + bh) / 2)); cleanDb = breathyDb; split = true; } }
-  // a recorded 裏声 defines 裏声 itself: the "clean & just above → 裏声ミックス" nudge stays only when no 裏声 was recorded or a 息漏れ split was learned
-  const pHead = (U && !split) ? RC.pFalsetto : RC.pHead;
+  if (U && H) { const bu = bmed(U), bh = bmed(H); if (bu - bh >= CAL.breathSplitMinDb) { const t = Math.min(CAL.splitMaxDb, Math.max(CAL.splitMinDb, (bu + bh) / 2));
+      // a recorded ミックス as breathy as the threshold would be pushed to 裏声 by it: then breath does not separate this voice
+      if (!(M && bmed(M) >= t - CAL.breathSplitMinDb / 2)) { breathyDb = t; cleanDb = t; split = true; } } }
+  const pHead = U ? RC.pFalsetto : RC.pHead; // a recorded 裏声 is 裏声: no 'clean → 裏声ミックス' nudge on top of it
   // ---- pitch floors: lowered to the lowest recorded pitch only when 地声 is recorded too ----
   const floorOf = (F) => CAL.floorRatio * quantile(F.map(r => r[0]), CAL.floorQuantile);
   const nonChest = [...(U || []), ...(H || []), ...(M || [])], mixLike = [...(M || []), ...(H || [])];
