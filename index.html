@@ -9,7 +9,7 @@
 <meta name="theme-color" content="#0d0e11">
 <title>ピッチメーター 試作版（ウェブ）</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="style.css?v=20261117hide">
+<link rel="stylesheet" href="style.css?v=20261118col">
 </head>
 <body>
 <svg class="sprite" width="0" height="0" aria-hidden="true">
@@ -328,13 +328,46 @@
     </div>
     <p class="rec-msg" id="recMsg" aria-live="polite"></p>
     <button class="btn small smp-reset" id="smpReset" hidden>初期設定に戻す（サンプルをすべて削除）</button>
+    <button class="sbtn white col-entry" id="colOpen"><svg class="ico"><use href="#i-mic"/></svg>判定用の声を集める（地声・裏声）</button>
     <button class="linkbtn caption" id="recQuick">録音してそのまま素材分析する（5秒）</button>
   </div>
 </div>
 
-<script src="ads-config.js?v=20261117hide"></script>
-<script src="core.js?v=20261117hide"></script>
-<script src="gauge.js?v=20261117hide"></script>
-<script src="app.js?v=20261117hide"></script>
+<!-- 判定用の声を集める（地声・裏声）: 音声は端末内の IndexedDB にだけ保存。まとめて保存は端末へのファイル保存のみ -->
+<div id="colSheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="colTitle">
+  <div class="sheetBody rec-sheet col-sheet">
+    <div class="row"><strong id="colTitle">判定用の声を集める</strong><span class="spacer"></span><button class="btn small" id="colClose">閉じる</button></div>
+    <div class="col-seg" role="radiogroup" aria-label="録る声の種類">
+      <button class="orient on" role="radio" aria-checked="true" data-cat="chest" id="colCatChest">地声</button>
+      <button class="orient" role="radio" aria-checked="false" data-cat="falsetto" id="colCatFals">裏声</button>
+    </div>
+    <div class="col-now"><span class="caption">いま録る声</span><div class="col-big" id="colBig" aria-live="polite">地声</div><div class="smp-guide" id="colGuide"></div></div>
+    <p class="rec-instr col-instr">「あー」で同じ高さを1音のばしてください（1回4秒）。</p>
+    <div class="col-counts">
+      <div class="col-count" id="colCntChest"><span>地声 <b id="colNChest">0</b>/30</span><div class="rec-level"><i id="colBarChest"></i></div></div>
+      <div class="col-count" id="colCntFals"><span>裏声 <b id="colNFals">0</b>/30</span><div class="rec-level"><i id="colBarFals"></i></div></div>
+    </div>
+    <div class="rec-count" id="colCount" aria-live="polite">4</div>
+    <div class="rec-state" id="colState"></div>
+    <div class="rec-level"><i id="colLevelBar"></i></div>
+    <button class="btn primary big" id="colRec"><span class="rec-dot" aria-hidden="true"></span><span id="colRecText">録音する</span></button>
+    <div class="smp-switch-row card-like"><span class="smp-switch-label" id="colAutoLabel">自動で次へ</span><span class="spacer"></span>
+      <label class="switch"><input type="checkbox" role="switch" id="colAuto" aria-labelledby="colAutoLabel" aria-describedby="colAutoDesc"><i></i></label></div>
+    <p class="caption smp-apply-desc" id="colAutoDesc">オンにすると、保存したあと3秒で次の録音が始まります。</p>
+    <button class="btn small" id="colRedo" disabled>最後のテイクを録り直す</button>
+    <p class="rec-msg" id="colMsg" aria-live="polite"></p>
+    <div class="row g8"><strong class="col-list-title">録ったテイク</strong><span class="spacer"></span><span class="caption" id="colTotal"></span></div>
+    <div class="col-list" id="colList"></div>
+    <div class="row g8 col-actions">
+      <button class="btn primary" id="colSave" disabled>まとめて保存</button><span class="spacer"></span>
+      <button class="btn small" id="colClear" disabled>全部消す</button>
+    </div>
+  </div>
+</div>
+
+<script src="ads-config.js?v=20261118col"></script>
+<script src="core.js?v=20261118col"></script>
+<script src="gauge.js?v=20261118col"></script>
+<script src="app.js?v=20261118col"></script>
 </body>
 </html>

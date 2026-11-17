@@ -25,7 +25,7 @@ function placePill() { const b = tabs.find(t => t.dataset.tab === tab); if (!b) 
 function selectTab(t) {
   if (t === tab && !$('tab-' + t).hidden) { placePill(); return; }
   if (tab === 'live' && t !== 'live') live.stop();
-  if (tab === 'file' && t !== 'file') rec.cancel();
+  if (tab === 'file' && t !== 'file') { rec.cancel(); try { col.cancel(); } catch (e) {} }
   tab = t;
   for (const id of ['file', 'live', 'profile']) $('tab-' + id).hidden = id !== t;
   tabs.forEach(b => { const on = b.dataset.tab === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
@@ -275,7 +275,7 @@ const file = (() => {
   function runProcess(analysis, audio, onProgress) {
     return new Promise((resolve, reject) => {
       const my = ++job; pendingReject = reject;
-      if (!worker) worker = new Worker('worker.js?v=20261117hide');
+      if (!worker) worker = new Worker('worker.js?v=20261118col');
       worker.onmessage = (e) => {
         const m = e.data; if (my !== job) return;
         if (m.type === 'progress') onProgress(m.value, m.label);
@@ -653,14 +653,14 @@ const live = (() => {
       track.onended = () => stop('マイクが外れたので停止しました。つなぎ直してから「開始」を押してください。');
       devHandler = () => stop('マイクの接続が変わったので停止しました。もう一度「開始」を押してください。');
       if (navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', devHandler);
-      worker = new Worker('worker.js?v=20261117hide'); tl = new C.GaugeTimeline([], C.defaultRange(), false); tl.frames = [];
+      worker = new Worker('worker.js?v=20261118col'); tl = new C.GaugeTimeline([], C.defaultRange(), false); tl.frames = [];
       worker.onmessage = (e) => { const m = e.data; if (m.type === 'liveFrames' && m.gen === my && running) tl.append(m.frames.map(([hz, register]) => ({ hz, register }))); };
       worker.postMessage({ type: 'liveStart', rate: ctx.sampleRate, personal: samples.personal() });
       src = ctx.createMediaStreamSource(stream);
       const sink = ctx.createGain(); sink.gain.value = 0; sink.connect(ctx.destination);
       const send = (buf) => { if (running && my === gen) worker.postMessage({ type: 'livePush', samples: buf, gen: my }, [buf.buffer]); };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261117hide');
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261118col');
         if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => send(e.data);
@@ -872,7 +872,7 @@ const rec = (() => {
         $('recLevelBar').style.width = Math.min(100, Math.round(Math.sqrt(peak) * 140)) + '%';
         if (phase === 'rec') { chunks.push(buf); got += buf.length; if (got >= limit * ctx.sampleRate) finish(); } };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261117hide'); if (my !== gen) return;
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261118col'); if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => onChunk(e.data);
       } else { node = ctx.createScriptProcessor(2048, 1, 1); node.onaudioprocess = (e) => onChunk(new Float32Array(e.inputBuffer.getChannelData(0))); }
@@ -903,6 +903,213 @@ const rec = (() => {
     personal: () => samples.personal(), open, setState: (k, ph) => { target = k; phase = ph; ui(); count(ph === 'rec' ? '4秒' : '3'); state(ph === 'rec' ? `録音中… ${nm(k)}で「あー」か「うー」。低い音から高い音へ（最長${MAX_SECONDS}秒）` : `まもなく録音が始まります。${nm(k)}で準備してください`); $('recLevelBar').style.width = '55%'; }, reset: () => { phase = 'idle'; target = null; ui(); } };
   return { cancel: close };
 })();
+
+// ======================= 判定用の声を集める（地声・裏声） =======================
+// 学習用に同じ条件（「あー」・1音・4秒）でテイクを集める。音声（WAV）は端末内の IndexedDB にだけ保存。
+// 「まとめて保存」は端末のファイル保存（iOS は共有シート→「ファイル」に保存/AirDrop）。ネットワークには何も送らない。
+const col = (() => {
+  const SECONDS = 4, COUNT = 3, TARGET = 30, AUTO_KEY = 'pm.collect.auto';
+  const CAT = { chest: { ja: '地声', en: 'chest', guide: '目安 ラ2（110 Hz）〜 ミ4（330 Hz）の出しやすい高さ' }, falsetto: { ja: '裏声', en: 'falsetto', guide: '目安 ソ4（392 Hz）〜 シ5（988 Hz）の出しやすい高さ' } };
+  let cat = 'chest', phase = 'idle', ctx = null, stream = null, node = null, src = null, gen = 0, chunks = [], got = 0, timer = 0, autoTimer = 0, startAt = 0, peak = 0;
+  let takes = [], lastId = null, redoId = null, player = null, playingId = null, prepared = null, dbp = null;
+  const msg = (t) => { $('colMsg').textContent = t || ''; };
+  // ---- IndexedDB ----
+  function db() {
+    if (dbp) return dbp;
+    dbp = new Promise((res, rej) => { if (!window.indexedDB) { rej(new Error('noidb')); return; }
+      const r = indexedDB.open('pm-collect', 1);
+      r.onupgradeneeded = () => { const d = r.result; if (!d.objectStoreNames.contains('takes')) d.createObjectStore('takes', { keyPath: 'id', autoIncrement: true }); };
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error || new Error('idb')); });
+    dbp.catch(() => { dbp = null; }); return dbp;
+  }
+  const tx = async (mode, fn) => { const d = await db(); return new Promise((res, rej) => { const t = d.transaction('takes', mode), st = t.objectStore('takes'); let out; const q = fn(st); if (q) q.onsuccess = () => { out = q.result; }; t.oncomplete = () => res(out); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error || new Error('abort')); }); };
+  const loadAll = async () => { const all = await tx('readonly', st => st.getAll()); takes = (all || []).sort((a, b) => a.id - b.id); };
+  // ---- 表示 ----
+  const pad = (n, w) => String(n).padStart(w || 2, '0');
+  const localTime = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
+  const numbered = () => { const n = { chest: 0, falsetto: 0 }; return takes.map(t => ({ t, no: ++n[t.cat] })); };
+  function render() {
+    const n = { chest: 0, falsetto: 0 }; for (const t of takes) n[t.cat]++;
+    $('colNChest').textContent = n.chest; $('colNFals').textContent = n.falsetto;
+    $('colBarChest').style.width = Math.min(100, n.chest / TARGET * 100) + '%'; $('colBarFals').style.width = Math.min(100, n.falsetto / TARGET * 100) + '%';
+    $('colCntChest').classList.toggle('on', cat === 'chest'); $('colCntFals').classList.toggle('on', cat === 'falsetto');
+    for (const [id, c] of [['colCatChest', 'chest'], ['colCatFals', 'falsetto']]) { const b = $(id); b.classList.toggle('on', cat === c); b.setAttribute('aria-checked', cat === c ? 'true' : 'false'); b.disabled = phase !== 'idle'; }
+    $('colBig').textContent = CAT[cat].ja; $('colGuide').textContent = CAT[cat].guide;
+    const busy = phase !== 'idle';
+    $('colRec').classList.toggle('recording', busy);
+    $('colRecText').textContent = phase === 'rec' ? '停止' : phase === 'count' || phase === 'prep' || phase === 'auto' ? 'やめる' : phase === 'save' ? '保存中…' : (redoId ? `${CAT[cat].ja}を録り直す` : `${CAT[cat].ja}を録音する`);
+    $('colRec').disabled = phase === 'save';
+    if (!busy) { $('colCount').textContent = String(SECONDS); if (!$('colState').dataset.keep) $('colState').textContent = `「録音する」を押すと3秒後に始まり、${SECONDS}秒で自動で止まります`; $('colLevelBar').style.width = '0%'; }
+    const last = takes.length ? takes[takes.length - 1] : null;
+    $('colRedo').disabled = busy || !last || !!redoId; $('colRedo').textContent = last ? `最後のテイクを録り直す（${CAT[last.cat].ja} #${numbered().pop().no}）` : '最後のテイクを録り直す';
+    $('colSave').disabled = busy || !takes.length; $('colClear').disabled = busy || !takes.length;
+    $('colTotal').textContent = takes.length ? `合計 ${takes.length}本` : '';
+    const list = $('colList'); list.textContent = '';
+    if (!takes.length) { const p = document.createElement('p'); p.className = 'col-empty'; p.textContent = 'まだ録っていません。上で地声か裏声を選んで「録音する」を押してください。'; list.appendChild(p); return; }
+    for (const { t, no } of numbered().reverse()) {
+      const row = document.createElement('div'); row.className = 'col-take';
+      const meta = document.createElement('div'); meta.className = 'meta';
+      const a = document.createElement('span'); a.innerHTML = `<b>${CAT[t.cat].ja} #${no}</b>`;
+      const c = document.createElement('span'); c.className = 'caption'; c.textContent = `${t.duration.toFixed(1)}秒・${t.medianF0 > 0 ? Math.round(t.medianF0) + ' Hz（' + C.doremi(69 + 12 * Math.log2(t.medianF0 / 440)) + '）' : '高さ不明'}・${localTime(t.at).slice(11, 16)}`;
+      meta.append(a, c);
+      const sp = document.createElement('span'); sp.className = 'spacer';
+      const play = document.createElement('button'); play.className = 'btn small'; play.textContent = playingId === t.id ? '停止' : '再生'; play.setAttribute('aria-label', `${CAT[t.cat].ja} #${no} を${playingId === t.id ? '停止' : '再生'}`); play.disabled = busy; play.onclick = () => togglePlay(t);
+      const del = document.createElement('button'); del.className = 'btn small'; del.textContent = '削除'; del.setAttribute('aria-label', `${CAT[t.cat].ja} #${no} を削除`); del.disabled = busy;
+      del.onclick = async () => { stopPlay(); try { await tx('readwrite', st => st.delete(t.id)); } catch (e) { msg('削除できませんでした。'); } await refresh(); msg(`${CAT[t.cat].ja} #${no} を削除しました。`); };
+      row.append(meta, sp, play, del); list.appendChild(row);
+    }
+  }
+  async function refresh() { prepared = null; try { await loadAll(); } catch (e) { msg('この端末に保存できません（プライベートブラウズでは使えないことがあります）。'); } render(); }
+  function stopPlay() { if (player) { try { player.pause(); URL.revokeObjectURL(player.src); } catch (e) {} } player = null; playingId = null; }
+  function togglePlay(t) {
+    if (playingId === t.id) { stopPlay(); render(); return; }
+    stopPlay(); setAudioSession('playback');
+    player = new Audio(URL.createObjectURL(new Blob([t.wav], { type: 'audio/wav' }))); playingId = t.id;
+    player.onended = () => { stopPlay(); render(); };
+    player.play().catch(() => { stopPlay(); msg('再生できませんでした。'); render(); }); render();
+  }
+  // ---- 録音 ----
+  function wav16(x, rate) {
+    const n = x.length, b = new ArrayBuffer(44 + n * 2), v = new DataView(b); const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
+    for (let i = 0; i < n; i++) { const s = Math.max(-1, Math.min(1, x[i])); v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true); }
+    return b;
+  }
+  function medianF0(x, rate) {
+    try { const f = C.analyzePitch16k(C.resampleAll(x, rate, 16000)).map(r => r.hz).filter(h => h > 0).sort((a, b) => a - b); return f.length ? f[f.length >> 1] : 0; } catch (e) { return 0; }
+  }
+  function teardown() {
+    gen++; clearInterval(timer); timer = 0;
+    try { if (src) src.disconnect(); if (node) { node.disconnect(); if (node.port) node.port.onmessage = null; node.onaudioprocess = null; } } catch (e) {}
+    if (stream) stream.getTracks().forEach(t => { t.onended = null; t.stop(); });
+    if (ctx) { try { ctx.close(); } catch (e) {} }
+    stream = null; node = null; src = null; ctx = null; setAudioSession('playback');
+  }
+  function fail(t) { teardown(); chunks = []; phase = 'idle'; msg(t); render(); }
+  function cancel() { clearTimeout(autoTimer); autoTimer = 0; if (phase === 'idle') return; teardown(); chunks = []; phase = 'idle'; render(); }
+  /** 録った音声を保存（テスト用フックからも呼ぶ）。 */
+  async function store(x, rate) {
+    let sq = 0, pk = 0; for (let i = 0; i < x.length; i++) { const a = x[i]; sq += a * a; if (Math.abs(a) > pk) pk = Math.abs(a); }
+    if (x.length < rate * 0.5) return { err: '録音が短すぎました。もう一度押してください。' };
+    if (pk < 0.01 || 10 * Math.log10(sq / x.length + 1e-20) < -55) return { err: '声が小さくて聞き取れませんでした。マイクに近づいて、もう少し大きめに録ってください。' };
+    const rec = { cat, wav: wav16(x, rate), rate, duration: Math.round(x.length / rate * 100) / 100, medianF0: Math.round(medianF0(x, rate) * 10) / 10, at: Date.now() };
+    try {
+      if (redoId) { rec.id = redoId; const old = takes.find(t => t.id === redoId); if (old) { rec.cat = old.cat; } await tx('readwrite', st => st.put(rec)); }
+      else await tx('readwrite', st => st.add(rec));
+    } catch (e) { return { err: '端末に保存できませんでした（空き容量かプライベートブラウズを確認してください）。' }; }
+    const wasRedo = !!redoId; redoId = null; await refresh();
+    const no = numbered().filter(o => o.t.cat === rec.cat).length;
+    return { ok: wasRedo ? `${CAT[rec.cat].ja}のテイクを録り直しました。` : `${CAT[rec.cat].ja} #${no} を保存しました（${rec.duration.toFixed(1)}秒${rec.medianF0 > 0 ? '・' + Math.round(rec.medianF0) + ' Hz' : ''}）。` };
+  }
+  async function finish() {
+    if (phase !== 'rec') return;
+    const rate = ctx ? ctx.sampleRate : 48000; teardown();
+    const x = new Float32Array(got); let o = 0; for (const c of chunks) { x.set(c.subarray(0, Math.min(c.length, got - o)), o); o += c.length; if (o >= got) break; } chunks = [];
+    phase = 'save'; render(); $('colState').textContent = '保存しています';
+    const r = await store(x, rate); phase = 'idle'; msg(r.err || r.ok); render();
+    if (!r.err && $('colAuto').checked && !$('colSheet').hidden) { phase = 'auto'; let left = 3; $('colCount').textContent = String(left); $('colState').textContent = `${left}秒後に次の${CAT[cat].ja}を録ります`; render();
+      const tick = () => { if (phase !== 'auto') return; left--; if (left <= 0) { phase = 'idle'; start(); return; } $('colCount').textContent = String(left); $('colState').textContent = `${left}秒後に次の${CAT[cat].ja}を録ります`; autoTimer = setTimeout(tick, 1000); };
+      autoTimer = setTimeout(tick, 1000); }
+  }
+  async function start() {
+    stopPlay(); msg(''); phase = 'prep'; render(); $('colCount').textContent = '…'; $('colState').textContent = 'マイクを準備しています'; const my = ++gen;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.isSecureContext) { fail('このブラウザではマイクを使えません（https で開いてください）。'); return; }
+    try { live.stop(); } catch (e) {}
+    try {
+      setAudioSession('play-and-record');
+      const AC = window.AudioContext || window.webkitAudioContext; ctx = new AC();
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 }, video: false });
+      if (my !== gen) { stream.getTracks().forEach(t => t.stop()); return; }
+      if (ctx.state === 'suspended') await ctx.resume();
+      const track = stream.getAudioTracks()[0]; if (track) track.onended = () => { if (phase === 'rec') finish(); else fail('マイクが外れたので録音をやめました。'); };
+      src = ctx.createMediaStreamSource(stream);
+      const sink = ctx.createGain(); sink.gain.value = 0; sink.connect(ctx.destination);
+      const onChunk = (buf) => { if (my !== gen) return; let p = 0; for (let i = 0; i < buf.length; i++) { const a = Math.abs(buf[i]); if (a > p) p = a; } peak = Math.max(p, peak * 0.85);
+        $('colLevelBar').style.width = Math.min(100, Math.round(Math.sqrt(peak) * 140)) + '%';
+        if (phase === 'rec') { chunks.push(buf); got += buf.length; if (got >= SECONDS * ctx.sampleRate) { got = SECONDS * ctx.sampleRate; finish(); } } };
+      if (ctx.audioWorklet && window.AudioWorkletNode) {
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261118col'); if (my !== gen) return;
+        node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
+        node.port.onmessage = (e) => onChunk(e.data);
+      } else { node = ctx.createScriptProcessor(2048, 1, 1); node.onaudioprocess = (e) => onChunk(new Float32Array(e.inputBuffer.getChannelData(0))); }
+      src.connect(node); node.connect(sink);
+      ctx.onstatechange = () => { if (ctx && ctx.state === 'interrupted') fail('ほかの音声で中断されたので録音をやめました。'); };
+      phase = 'count'; render(); let left = COUNT; $('colCount').textContent = String(left); $('colState').textContent = `まもなく録音が始まります。${CAT[cat].ja}で準備してください`;
+      timer = setInterval(() => { if (my !== gen) return;
+        if (phase === 'count') { left--; if (left > 0) { $('colCount').textContent = String(left); return; }
+          phase = 'rec'; chunks = []; got = 0; startAt = performance.now(); render(); $('colCount').textContent = String(SECONDS); $('colState').textContent = `録音中… ${CAT[cat].ja}で「あー」`; return; }
+        if (phase === 'rec') { $('colCount').textContent = String(Math.max(0, SECONDS - Math.floor((performance.now() - startAt) / 1000)));
+          if (performance.now() - startAt > SECONDS * 1000 + 1500) finish(); } }, 1000);
+    } catch (e) {
+      if (my !== gen) return;
+      const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
+      fail(denied ? 'マイクが許可されていません。ブラウザの設定でマイクを許可してから、もう一度押してください。' : (e && e.name === 'NotFoundError' ? 'マイクが見つかりませんでした。' : '録音を開始できませんでした。もう一度試してください。'));
+    }
+  }
+  // ---- まとめて保存（ZIP・無圧縮）: chest/chest_001.wav, falsetto/falsetto_001.wav, labels.csv ----
+  const crcT = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  const crc32 = (u) => { let c = 0xffffffff; for (let i = 0; i < u.length; i++) c = crcT[(c ^ u[i]) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+  function zip(files) { // files: [{ name, data: Uint8Array, date }]
+    const enc = new TextEncoder(), parts = [], cen = []; let off = 0;
+    for (const f of files) {
+      const nm = enc.encode(f.name), crc = crc32(f.data), d = f.date, dt = ((d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1)) & 0xffff, dd = (((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate()) & 0xffff;
+      const h = new DataView(new ArrayBuffer(30)); h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint16(8, 0, true); h.setUint16(10, dt, true); h.setUint16(12, dd, true);
+      h.setUint32(14, crc, true); h.setUint32(18, f.data.length, true); h.setUint32(22, f.data.length, true); h.setUint16(26, nm.length, true); h.setUint16(28, 0, true);
+      parts.push(new Uint8Array(h.buffer), nm, f.data);
+      const c = new DataView(new ArrayBuffer(46)); c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true); c.setUint16(10, 0, true); c.setUint16(12, dt, true); c.setUint16(14, dd, true);
+      c.setUint32(16, crc, true); c.setUint32(20, f.data.length, true); c.setUint32(24, f.data.length, true); c.setUint16(28, nm.length, true); c.setUint32(42, off, true);
+      cen.push(new Uint8Array(c.buffer), nm); off += 30 + nm.length + f.data.length;
+    }
+    const csize = cen.reduce((a, u) => a + u.length, 0), e = new DataView(new ArrayBuffer(22)); e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true); e.setUint32(12, csize, true); e.setUint32(16, off, true);
+    return new Blob([...parts, ...cen, new Uint8Array(e.buffer)], { type: 'application/zip' });
+  }
+  function buildZip() {
+    const rows = ['filename,category,category_en,duration_s,median_f0_hz,recorded_at'], files = [];
+    for (const { t, no } of numbered()) { const en = CAT[t.cat].en, name = `${en}/${en}_${pad(no, 3)}.wav`;
+      files.push({ name, data: new Uint8Array(t.wav), date: new Date(t.at) }); rows.push([name, CAT[t.cat].ja, en, t.duration.toFixed(2), t.medianF0 > 0 ? t.medianF0.toFixed(1) : '', localTime(t.at)].join(',')); }
+    files.push({ name: 'labels.csv', data: new TextEncoder().encode('\ufeff' + rows.join('\r\n') + '\r\n'), date: new Date() });
+    const d = new Date(), fname = `pitchmeter-voices-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.zip`;
+    const blob = zip(files); let file; try { file = new File([blob], fname, { type: 'application/zip' }); } catch (e) { file = blob; file.name = fname; }
+    return file;
+  }
+  function download(file) { const u = URL.createObjectURL(file), a = document.createElement('a'); a.href = u; a.download = file.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 60000); }
+  async function save() {
+    if (!takes.length) return;
+    const n = { chest: 0, falsetto: 0 }; for (const t of takes) n[t.cat]++;
+    const file = prepared || buildZip(); prepared = file;
+    const done = `地声${n.chest}本・裏声${n.falsetto}本と labels.csv を「${file.name}」にまとめました。`;
+    if (navigator.canShare && navigator.share && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: file.name }); msg(done); return; }
+      catch (e) { if (e && e.name === 'AbortError') { msg('保存をやめました。もう一度「まとめて保存」を押すと保存できます。'); return; }
+        if (e && e.name === 'NotAllowedError') { msg('準備ができました。もう一度「まとめて保存」を押してください。'); return; } }
+    }
+    download(file); msg(done + 'ダウンロードフォルダ（iPhone は「ファイル」）に保存されます。');
+  }
+  // ---- 画面 ----
+  const m = modal($('colSheet'), () => close());
+  async function open() { msg(''); delete $('colState').dataset.keep; m.open('colRec'); await refresh(); }
+  function close() { cancel(); stopPlay(); m.close(); }
+  for (const [id, c] of [['colCatChest', 'chest'], ['colCatFals', 'falsetto']]) $(id).onclick = () => { if (phase !== 'idle') return; cat = c; redoId = null; try { localStorage.setItem('pm.collect.cat', c); } catch (e) {} render(); };
+  try { const c = localStorage.getItem('pm.collect.cat'); if (c === 'chest' || c === 'falsetto') cat = c; } catch (e) {}
+  $('colRec').onclick = () => { if (phase === 'idle') start(); else if (phase === 'rec') finish(); else if (phase !== 'save') cancel(); };
+  $('colRedo').onclick = () => { const last = takes[takes.length - 1]; if (!last || phase !== 'idle') return; redoId = last.id; cat = last.cat; msg(`${CAT[last.cat].ja} #${numbered().pop().no} を録り直します。「${CAT[last.cat].ja}を録り直す」を押してください。`); render(); };
+  $('colSave').onclick = () => { if (phase === 'idle') save(); };
+  $('colClear').onclick = async () => {
+    if (phase !== 'idle' || !takes.length) return;
+    if (!window.confirm(`録ったテイク（地声・裏声 合計${takes.length}本）をすべて削除しますか？元に戻せません。`)) return;
+    stopPlay(); redoId = null; try { await tx('readwrite', st => st.clear()); } catch (e) {} await refresh(); msg('すべて削除しました。');
+  };
+  try { $('colAuto').checked = localStorage.getItem(AUTO_KEY) === '1'; } catch (e) {}
+  $('colAuto').setAttribute('aria-checked', $('colAuto').checked ? 'true' : 'false');
+  $('colAuto').onchange = (e) => { e.target.setAttribute('aria-checked', e.target.checked ? 'true' : 'false'); try { localStorage.setItem(AUTO_KEY, e.target.checked ? '1' : '0'); } catch (er) {} };
+  $('colClose').onclick = close;
+  document.addEventListener('visibilitychange', () => { if (document.hidden) cancel(); });
+  render();
+  if (/[?&]smptest\b/.test(location.search)) window.__pmCollectTest = { buildZip, takes: () => takes, setRec: () => { phase = 'rec'; render(); $('colCount').textContent = '2'; $('colState').textContent = `録音中… ${CAT[cat].ja}で「あー」`; $('colLevelBar').style.width = '60%'; }, reset: () => { phase = 'idle'; render(); } };
+  return { open, cancel: close };
+})();
+$('colOpen').onclick = () => { rec.cancel(); col.open(); };
 
 ads.build(); ads.update();
 selectTab('file');
