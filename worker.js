@@ -1,6 +1,6 @@
 /* Analysis worker: runs entirely on this device. Nothing is uploaded.
    process() = iOS LocalAudioPipeline.process (原音 / 歌声 / 歌声＋保守的補完, 出力音声 原音 / 歌声のみ / 伴奏のみ). */
-importScripts('core.js?v=20261118soft', 'sep.js?v=20261118soft');
+importScripts('core.js?v=20261118back6', 'sep.js?v=20261118back6');
 let live = null, sessions = null, ortReady = null, cancelled = false;
 function loadOrt() {
   if (ortReady) return ortReady;
@@ -46,7 +46,7 @@ self.onmessage = async (e) => {
       else {
         const v16 = C.resampleAll(sep.mono, 44100, 16000);
         const vocal = C.analyzePitch16k(v16, prog(0.75, 0.85, '解析'));
-        frames = C.attachRegister(m.analysis === 'vocal' ? vocal : S.conservativeFusion(vocal, original), sep.mono, prog(0.85, 1, '解析'), m.personal || null, mono);
+        frames = C.attachRegister(m.analysis === 'vocal' ? vocal : S.conservativeFusion(vocal, original), sep.mono, prog(0.85, 1, '解析'), m.personal || null);
       }
       const p = pack(frames), tr = [p.hz.buffer, p.reg.buffer, p.fb.buffer];
       const out = { type: 'result', id: m.id, ...p };

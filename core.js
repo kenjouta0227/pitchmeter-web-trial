@@ -116,12 +116,6 @@ const RC = {
   medianFrames: 17, pFalsetto: 0.70, pMix: 0.35, stableFrames: 6, minValidFraction: 0.5,
   fallbackMinHz: 150.0, fallbackMaxHz: 1100.0, fallbackMaxAperiodicity: 0.15, fallbackMinCpp: 2.0,
   fallbackHalfWindowSeconds: 0.035, fallbackMinFrames: 5, fallbackMaxCents: 100.0,
-  // 2026-11-18 地声→裏声 誤判定対策 (a 裏声 vote is dropped = not judged; ミックス votes and everything else unchanged):
-  //  harmonic error: the "f0" is really the 2nd/3rd harmonic of a lower 地声 (loud/clipped voice, room echo) when the spectrum
-  //   also has clear peaks at f0/2 and 1.5·f0 (≥ subErr2Db above their valleys) or at f0/3 and 2·f0/3 (≥ subErr3Db),
-  //   each no weaker than subErrRelDb below the f0 peak.
-  //  bright & very periodic just above the gate (f0 < chestCppMaxHz with cpp8k ≥ chestCppMin) looks like a soft high 地声, not 裏声.
-  subErr2Db: 20.0, subErr3Db: 25.0, subErrRelDb: -40.0, subErrMinHz: 80.0, sepOctaveCents: 60.0, sepRefMinHz: 80.0, chestCppMaxHz: 480.0, chestCppMin: 4.2,
 };
 const REG = { none: 0, mix: 1, falsetto: 2, chest: 3, uraMix: 4 };
 const REG_LABEL = { 0: null, 1: 'ミックス', 2: '裏声', 3: '地声', 4: '裏声ミックス' }; // 3 (地声) is only produced with a personal calibration that includes 地声
@@ -161,9 +155,8 @@ class RegisterClassifier {
     fft(re, im);
     const L = this.L; for (let k = 0; k <= n / 2; k++) L[k] = 20 * log10(Math.sqrt(re[k] * re[k] + im[k] * im[k]) + 1e-12);
     const binHz = this.sampleRate / n;
-    if (relaxed) { const fr = this.octaveCheck(L, relaxed, binHz); out.relaxedF0 = fr; out.breathDb = this.breath(L, fr, binHz); out.subErr = this.subError(L, fr, binHz); return out; }
+    if (relaxed) { const fr = this.octaveCheck(L, relaxed, binHz); out.relaxedF0 = fr; out.breathDb = this.breath(L, fr, binHz); return out; }
     const f0 = this.octaveCheck(L, f0yin, binHz);
-    out.subErr = this.subError(L, f0, binHz);
     out.f0 = f0;
     const H = [];
     for (let k = 1; k * f0 < RC.maxHarmonicHz && k * f0 < this.sampleRate / 2 - binHz * 2; k++) H.push(this.peak(L, k * f0, binHz));
@@ -207,15 +200,6 @@ class RegisterClassifier {
     return n >= 2 ? 10 * log10(va / pk + 1e-12) : NaN;
   }
   at(L, hz, binHz) { const i = roundHalfEven(hz / binHz); return L[Math.min(Math.max(i, 0), L.length - 1)]; }
-  /** true when f0 looks like the 2nd/3rd harmonic of a lower pitch (only checked where a 裏声 vote is possible). */
-  subError(L, f0, binHz) {
-    if (!(f0 >= RC.gateMinF0)) return false;
-    const ref = this.peak(L, f0, binHz);
-    const prom = (hz, w) => { const pk = this.peak(L, hz, binHz); return pk - ref < RC.subErrRelDb ? -1e9 : pk - Math.min(this.at(L, hz - w, binHz), this.at(L, hz + w, binHz)); };
-    if (f0 / 2 >= RC.subErrMinHz && Math.min(prom(f0 / 2, f0 / 4), prom(1.5 * f0, f0 / 4)) >= RC.subErr2Db) return true;
-    if (f0 / 3 >= RC.subErrMinHz && Math.min(prom(f0 / 3, f0 / 6), prom(2 * f0 / 3, f0 / 6)) >= RC.subErr3Db) return true;
-    return false;
-  }
   octaveCheck(L, f0in, binHz) {
     let f0 = f0in;
     for (let it = 0; it < 2; it++) {
@@ -263,18 +247,9 @@ class RegisterClassifier {
     const P = opts.personal || null, sm = new Smoother(P);
     if (mono.length <= n) return { frameCenters: centers, states, features: feats, pitch, probs };
     let cnt = 0;
-    const ref = opts.ref && opts.ref.length === mono.length ? opts.ref : null;
     for (let s = 0; s < mono.length - n; s += this.hop) {
-      let f = this.features(mono, s, !keep);
-      let p = frameValue(P, f);
-      // 2026-11-18 分離後の歌声で地声の基音が消える（伴奏側へ持っていかれる）と、f0 が 2〜5 倍に化けて「倍音の少ない高い声」= 裏声に見える。
-      // 裏声側の票のときだけ原音（分離前）の同じフレームを調べ、原音の f0 のちょうど 2〜5 倍なら分離の誤りとして原音の特徴で判定し直す。
-      if (ref && (p === CAL.BREATHY || (typeof p === 'number' && p !== CAL.CHEST && p > (P && isFinite(P.pMix) ? P.pMix : RC.pMix)))) {
-        // 原音側は低い地声（〜80 Hz）まで f0 を取れる YIN 床で見る（既定の 150 Hz 床だと 121 Hz の地声が 0 や 2 倍になる）
-        if (!this.refCl) this.refCl = new RegisterClassifier(this.sampleRate, { yinMinHz: RC.sepRefMinHz, noRelaxed: true });
-        const g = this.refCl.features(ref, s, true), a = f.f0 > 0 ? f.f0 : f.relaxedF0;
-        if (g.f0 > 0 && a > 0) { const r = a / g.f0, k = Math.round(r); if (k >= 2 && k <= 5 && Math.abs(1200 * log2(r / k)) <= RC.sepOctaveCents) { f = g; p = frameValue(P, g); } }
-      }
+      const f = this.features(mono, s, !keep);
+      const p = frameValue(P, f);
       states.push(sm.push(p, f.f0, f.breathDb)); probs.push(p); pitch.push(RegisterClassifier.fallbackCandidate(f));
       centers.push((s + n / 2) / this.sampleRate); if (keep) feats.push(f);
       if (onProgress && (++cnt % 200 === 0)) onProgress(s / mono.length);
@@ -346,23 +321,16 @@ function thresholdsOf(P) {
   if (P) for (const k in T) if (typeof P[k] === 'number' && isFinite(P[k])) T[k] = P[k];
   return T;
 }
-/** 2026-11-18: drop a 裏声-side vote (p > the ミックス threshold) that is a harmonic error or a bright, very periodic frame just above the gate. */
-function chestGuard(P, f, v) {
-  if (v === null || v === CAL.CHEST || !(v > (P && isFinite(P.pMix) ? P.pMix : RC.pMix))) return v;
-  if (f.subErr) return null;
-  if (f.f0 < RC.chestCppMaxHz && f.cpp8k >= RC.chestCppMin) return null;
-  return v;
-}
 /** Per-frame smoother value (default or personal). */
 function frameValue(P, f) {
   const gateMin = P ? P.gateMinF0 : RC.gateMinF0;
   if (!(f.f0 > 0)) { // relaxed breathy frame → 裏声 vote only
     const fr = f.relaxedF0;
-    if (fr >= gateMin && fr <= RC.gateMaxF0 && f.rmsDb > RC.gateMinRmsDbfs && f.breathDb >= (P && isFinite(P.breathyDb) ? Math.max(RC.relaxedBreathMin, P.breathyDb) : RC.relaxedBreathMin) && f.breathDb <= RC.relaxedBreathMax) return f.subErr ? null : CAL.BREATHY;
+    if (fr >= gateMin && fr <= RC.gateMaxF0 && f.rmsDb > RC.gateMinRmsDbfs && f.breathDb >= (P && isFinite(P.breathyDb) ? Math.max(RC.relaxedBreathMin, P.breathyDb) : RC.relaxedBreathMin) && f.breathDb <= RC.relaxedBreathMax) return CAL.BREATHY;
     return null;
   }
-  const v = P ? personalValue(P, f) : (RegisterClassifier.isValid(f) ? RegisterClassifier.probabilityFalsetto(f) : null);
-  return chestGuard(P, f, v);
+  if (!P) return RegisterClassifier.isValid(f) ? RegisterClassifier.probabilityFalsetto(f) : null;
+  return personalValue(P, f);
 }
 
 // ---------------- Personal calibration (「地声を録る」「ミックスを録る」「裏声ミックスを録る」「裏声を録る」) ----------------
@@ -549,10 +517,10 @@ function analyzePitch16k(pcm16, onProgress) {
   }
   return frames;
 }
-function attachRegister(frames, mono44100, onProgress, personal, refMono44100) { // refMono: 分離前の原音（分離した歌声を判定するとき）
+function attachRegister(frames, mono44100, onProgress, personal) {
   if (!frames.length) return frames;
   const P = personal || null, cl = new RegisterClassifier(44100, classifierOpts(P));
-  const track = cl.analyze(mono44100, { onProgress, personal: P, ref: refMono44100 || null });
+  const track = cl.analyze(mono44100, { onProgress, personal: P });
   if (!track.frameCenters.length) return frames;
   const first = track.frameCenters[0], hopS = cl.hop / cl.sampleRate;
   return frames.map(f => {
@@ -726,96 +694,7 @@ function buildStates(frames, vertical, selectedRange) {
   return { range: tl.range, states };
 }
 
-// ---------------- MovAudio (2026-11-18): AAC audio track out of .mov / .mp4 / .m4v, on-device only ----------------
-// Used when the browser's decodeAudioData cannot open a video container (e.g. iPhone screen recordings in Safari).
-// demux(ArrayBuffer) → { asc, sampleRate, channels, aot, frames: [Uint8Array], timescale, skip (media units), leadSec }
-const MovAudio = (() => {
-  const CONT = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl', 'edts', 'dinf']);
-  const fourcc = (u, o) => String.fromCharCode(u[o], u[o + 1], u[o + 2], u[o + 3]);
-  function boxes(dv, u, start, end, cb) {
-    let o = start;
-    while (o + 8 <= end) {
-      let size = dv.getUint32(o), hdr = 8; const type = fourcc(u, o + 4);
-      if (size === 1) { size = Number(dv.getBigUint64(o + 8)); hdr = 16; } else if (size === 0) size = end - o;
-      if (size < hdr || o + size > end) break;
-      cb(type, o + hdr, o + size); o += size;
-    }
-  }
-  function find(dv, u, start, end, path) { // first box along path, e.g. ['mdia','hdlr']
-    let res = null;
-    boxes(dv, u, start, end, (t, s, e) => { if (res || t !== path[0]) return; res = path.length === 1 ? [s, e] : find(dv, u, s, e, path.slice(1)); });
-    return res;
-  }
-  function esdsASC(u, s, e) { // scan the sample entry for 'esds' → DecoderSpecificInfo
-    for (let i = s; i + 8 < e; i++) {
-      if (u[i] !== 0x65 || fourcc(u, i) !== 'esds') continue;
-      let p = i + 8; const end = Math.min(e, i - 4 + ((u[i - 4] << 24) | (u[i - 3] << 16) | (u[i - 2] << 8) | u[i - 1]));
-      const desc = () => { const tag = u[p++]; let len = 0; for (let k = 0; k < 4; k++) { const b = u[p++]; len = (len << 7) | (b & 0x7f); if (!(b & 0x80)) break; } return [tag, len]; };
-      while (p < end) {
-        const [tag, len] = desc();
-        if (tag === 0x03) { p += 2; const fl = u[p++]; if (fl & 0x80) p += 2; if (fl & 0x40) p += 1 + u[p]; if (fl & 0x20) p += 2; }
-        else if (tag === 0x04) { const ot = u[p]; p += 13; if (ot !== 0x40 && ot !== 0x66 && ot !== 0x67 && ot !== 0x68) return null; }
-        else if (tag === 0x05) return u.slice(p, p + len);
-        else p += len;
-      }
-    }
-    return null;
-  }
-  function parseASC(a) {
-    let bit = 0; const rd = (n) => { let v = 0; for (let k = 0; k < n; k++, bit++) v = (v << 1) | ((a[bit >> 3] >> (7 - (bit & 7))) & 1); return v; };
-    let aot = rd(5); if (aot === 31) aot = 32 + rd(6);
-    const SR = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
-    let fi = rd(4), sr = fi === 15 ? rd(24) : SR[fi]; const ch = rd(4);
-    if (aot === 5 || aot === 29) { const efi = rd(4); if (efi === 15) rd(24); aot = rd(5); } // HE-AAC: ADTS carries the core (implicit SBR)
-    return { aot, fi: fi === 15 ? SR.indexOf(sr) : fi, sampleRate: sr, channels: ch };
-  }
-  function demux(buf) {
-    const u = new Uint8Array(buf), dv = new DataView(buf);
-    const moov = find(dv, u, 0, u.length, ['moov']); if (!moov) throw new Error('mov: no moov');
-    const mvhd = find(dv, u, moov[0], moov[1], ['mvhd']); const movieScale = mvhd ? dv.getUint32(mvhd[0] + (u[mvhd[0]] === 1 ? 20 : 12)) : 0;
-    let out = null;
-    boxes(dv, u, moov[0], moov[1], (t, s, e) => {
-      if (out || t !== 'trak') return;
-      const hdlr = find(dv, u, s, e, ['mdia', 'hdlr']); if (!hdlr || fourcc(u, hdlr[0] + 8) !== 'soun') return;
-      const mdhd = find(dv, u, s, e, ['mdia', 'mdhd']); const timescale = dv.getUint32(mdhd[0] + (u[mdhd[0]] === 1 ? 20 : 12));
-      const stbl = find(dv, u, s, e, ['mdia', 'minf', 'stbl']); if (!stbl) return;
-      const stsd = find(dv, u, stbl[0], stbl[1], ['stsd']); if (!stsd) return;
-      const es = stsd[0] + 8, esEnd = es + dv.getUint32(es); if (fourcc(u, es + 4) !== 'mp4a') return;
-      const asc = esdsASC(u, es + 8, esEnd); if (!asc) return;
-      const stsz = find(dv, u, stbl[0], stbl[1], ['stsz']), stsc = find(dv, u, stbl[0], stbl[1], ['stsc']);
-      const stco = find(dv, u, stbl[0], stbl[1], ['stco']), co64 = find(dv, u, stbl[0], stbl[1], ['co64']);
-      if (!stsz || !stsc || !(stco || co64)) return;
-      const fixed = dv.getUint32(stsz[0] + 4), n = dv.getUint32(stsz[0] + 8), sizes = new Array(n);
-      for (let i = 0; i < n; i++) sizes[i] = fixed || dv.getUint32(stsz[0] + 12 + 4 * i);
-      const co = stco || co64, nc = dv.getUint32(co[0] + 4), offs = new Array(nc);
-      for (let i = 0; i < nc; i++) offs[i] = stco ? dv.getUint32(co[0] + 8 + 4 * i) : Number(dv.getBigUint64(co[0] + 8 + 8 * i));
-      const ns = dv.getUint32(stsc[0] + 4), sc = []; for (let i = 0; i < ns; i++) { const b = stsc[0] + 8 + 12 * i; sc.push([dv.getUint32(b), dv.getUint32(b + 4)]); }
-      const frames = []; let k = 0;
-      for (let c = 0; c < nc && k < n; c++) {
-        let per = 0; for (const [first, spc] of sc) { if (first - 1 <= c) per = spc; else break; }
-        let o = offs[c]; for (let j = 0; j < per && k < n; j++, k++) { if (o + sizes[k] > u.length) { k = n; break; } frames.push(u.subarray(o, o + sizes[k])); o += sizes[k]; }
-      }
-      let skip = 0, leadSec = 0; const elst = find(dv, u, s, e, ['edts', 'elst']);
-      if (elst) { const v1 = u[elst[0]] === 1, cnt = dv.getUint32(elst[0] + 4); let p = elst[0] + 8;
-        for (let i = 0; i < cnt; i++) { const dur = v1 ? Number(dv.getBigUint64(p)) : dv.getUint32(p), mt = v1 ? Number(dv.getBigInt64(p + 8)) : dv.getInt32(p + 4); p += v1 ? 20 : 12;
-          if (mt === -1) { if (movieScale) leadSec += dur / movieScale; } else { skip = mt; break; } } }
-      out = Object.assign(parseASC(asc), { asc, frames, timescale, skip, leadSec });
-    });
-    if (!out || !out.frames.length) throw new Error('mov: no AAC audio track');
-    return out;
-  }
-  function toADTS(d) { // raw AAC frames → ADTS stream (decodable by decodeAudioData as audio/aac)
-    const prof = Math.min(Math.max(d.aot, 1), 4) - 1; let total = 0; for (const f of d.frames) total += f.length + 7;
-    const o = new Uint8Array(total); let p = 0;
-    for (const f of d.frames) { const L = f.length + 7;
-      o[p] = 0xff; o[p + 1] = 0xf1; o[p + 2] = (prof << 6) | (d.fi << 2) | ((d.channels >> 2) & 1); o[p + 3] = ((d.channels & 3) << 6) | (L >> 11);
-      o[p + 4] = (L >> 3) & 0xff; o[p + 5] = ((L & 7) << 5) | 0x1f; o[p + 6] = 0xfc; o.set(f, p + 7); p += L; }
-    return o;
-  }
-  return { demux, toADTS, parseASC };
-})();
-
-const api = { MovAudio, roundHalfEven, pitchDetect, pitchNote, noteLabel, Resampler, resampleAll, fft, RC, REG, REG_LABEL, RegisterClassifier, Smoother,
-  analyzePitch16k, attachRegister, CAL, GUIDE, guideNotes, doremi, midiHz, calibrationFrames, buildCalibration, personalValue, frameValue, chestGuard, thresholdsOf, analyzeMono, LivePitchStream, makeRange, defaultRange, BandRule, GaugeTimeline, buildStates };
+const api = { roundHalfEven, pitchDetect, pitchNote, noteLabel, Resampler, resampleAll, fft, RC, REG, REG_LABEL, RegisterClassifier, Smoother,
+  analyzePitch16k, attachRegister, CAL, GUIDE, guideNotes, doremi, midiHz, calibrationFrames, buildCalibration, personalValue, frameValue, thresholdsOf, analyzeMono, LivePitchStream, makeRange, defaultRange, BandRule, GaugeTimeline, buildStates };
 if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PMCore = api;
 })(typeof self !== 'undefined' ? self : this);
