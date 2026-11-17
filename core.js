@@ -414,7 +414,8 @@ const BandRule = {
     if (!judgmentVisible) return { chest: 1, mix: 1, ura: 1 };
     const at = BandRule.labelPositions(vertical);
     if (register === REG.falsetto) return { chest: position <= at.chest ? 0 : 1, mix: position <= at.mix ? 0 : 1, ura: 1 };
-    if (register === REG.mix) return { chest: 1, mix: 1, ura: position >= at.ura ? 0 : 1 };
+    // 2026-11-17: ミックス判定中は上の固定表示（地声・ミックス・裏声）をすべて消す。判定が外れたら元に戻る
+    if (register === REG.mix) return { chest: 0, mix: 0, ura: 0 };
     return { chest: 1, mix: 1, ura: 1 };
   },
   fadeSeconds: 0.05,
