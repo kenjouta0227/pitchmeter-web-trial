@@ -119,6 +119,8 @@ const RC = {
   // 2026-11-18 裏声の既定サンプル（ura1–3）をリセット: サンプル音声（個人校正）がないときは「裏声」を出さない（判定なし）。
   // ミックス / 裏声ミックスの既定判定はそのまま。サンプル音声を適用中は個人の校正どおり（裏声も出る）。
   defaultFalsetto: false,
+  // 2026-11-18 ミックスの既定サンプル（mix1–3）もリセット: サンプル音声（個人校正）がないときは「ミックス」も出さない（判定なし）。
+  defaultMix: false,
 };
 const REG = { none: 0, mix: 1, falsetto: 2, chest: 3, uraMix: 4 };
 const REG_LABEL = { 0: null, 1: 'ミックス', 2: '裏声', 3: '地声', 4: '裏声ミックス' }; // 3 (地声) is only produced with a personal calibration that includes 地声
@@ -289,7 +291,7 @@ function medianFallback(pitch, lo, hi) {
  *     裏声 with p < pHead (just above pF) and breath ≤ cleanDb (little breath) → 裏声ミックス
  *   ミックス / 裏声ミックス are not shown below mixFloorHz; a breathy relaxed frame can never yield ミックス / 裏声ミックス. */
 class Smoother {
-  constructor(personal) { this.history = []; this.bhist = []; this.candidate = REG.none; this.count = 0; this.state = REG.none; this.T = thresholdsOf(personal); this.falsettoOn = !!personal || RC.defaultFalsetto; }
+  constructor(personal) { this.history = []; this.bhist = []; this.candidate = REG.none; this.count = 0; this.state = REG.none; this.T = thresholdsOf(personal); this.falsettoOn = !!personal || RC.defaultFalsetto; this.mixOn = !!personal || RC.defaultMix; }
   push(p, f0, breath) {
     const T = this.T, med = (a) => a.length % 2 ? a[a.length >> 1] : (a[a.length / 2 - 1] + a[a.length / 2]) / 2;
     this.history.push(p); this.bhist.push(p === null || p === CAL.CHEST ? NaN : breath);
@@ -315,6 +317,7 @@ class Smoother {
       }
     }
     if (c === REG.falsetto && !this.falsettoOn) c = REG.none; // 既定の裏声サンプルなし（2026-11-18）
+    if (c === REG.mix && !this.mixOn) c = REG.none; // 既定のミックスサンプルなし（2026-11-18）
     if (c === this.candidate) this.count++; else { this.candidate = c; this.count = 1; }
     if (this.count >= RC.stableFrames) this.state = c;
     return this.state;
