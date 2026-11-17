@@ -116,21 +116,15 @@ const RC = {
   medianFrames: 17, pFalsetto: 0.70, pMix: 0.35, stableFrames: 6, minValidFraction: 0.5,
   fallbackMinHz: 150.0, fallbackMaxHz: 1100.0, fallbackMaxAperiodicity: 0.15, fallbackMinCpp: 2.0,
   fallbackHalfWindowSeconds: 0.035, fallbackMinFrames: 5, fallbackMaxCents: 100.0,
-  // 2026-11-18 低音域の地声/裏声 (default, no calibration): below the ミックス floor (100–440 Hz) a separate 2-class model
-  // fitted on the owner's labelled takes (31 地声 / 30 裏声, leave-one-take-out CV) decides 地声 vs 裏声:
-  //   z = b + wh·hrichDb + wc·cpp8k + wf·log2(f0/440); q = σ(z) = P(裏声); q ≥ conf → 裏声 vote, q ≤ 1−conf → 地声 vote, else not judged.
-  //   no 裏声 vote below uraMinHz (lowest 裏声 in the data ≈ 200 Hz; also cpp is unreliable below 150 Hz) → only 地声 or not judged there.
-  low: { minHz: 100.0, maxHz: 440.0, uraMinHz: 185.0, b: 13.3831, wh: -0.5016, wc: -1.1122, wf: 9.6975, conf: 0.85 },
-  yinMinHz: 95.0, // default YIN floor (was f0Min 150) so 地声 down to ~ラ2 gets an f0; personal calibration keeps its own floors
 };
 const REG = { none: 0, mix: 1, falsetto: 2, chest: 3, uraMix: 4 };
-const REG_LABEL = { 0: null, 1: 'ミックス', 2: '裏声', 3: '地声', 4: '裏声ミックス' }; // 3 (地声): default below 440 Hz (RC.low) or a personal 地声 calibration
+const REG_LABEL = { 0: null, 1: 'ミックス', 2: '裏声', 3: '地声', 4: '裏声ミックス' }; // 3 (地声) is only produced with a personal calibration that includes 地声
 
 class RegisterClassifier {
   constructor(sampleRate, opts) {
     this.sampleRate = sampleRate || 44100;
-    // default YIN floor RC.yinMinHz (95 Hz, 2026-11-18); a personal calibration passes its own (80 Hz with 地声, else 150 Hz).
-    this.yinMinHz = (opts && opts.yinMinHz > 0) ? opts.yinMinHz : RC.yinMinHz;
+    // yinMinHz < RC.f0Min only when a personal 地声 calibration exists (80 Hz); default path is unchanged.
+    this.yinMinHz = (opts && opts.yinMinHz > 0) ? opts.yinMinHz : RC.f0Min;
     this.relaxed = !(opts && opts.noRelaxed); // calibration recordings use strict frames only
     const n = 1 << roundHalfEven(log2(0.0464 * this.sampleRate));
     this.frameLength = n; this.hop = n / 4;
@@ -285,7 +279,7 @@ function medianFallback(pitch, lo, hi) {
   return m;
 }
 /** Display smoothing over 17 frames (~0.2 s), switches after 6 identical candidates.
- *  Frame values: p(裏声) 0…1, CAL.CHEST (地声 frame: personal, or default below 440 Hz via lowValue), CAL.BREATHY (relaxed-gate breathy frame: votes 裏声 only), or null.
+ *  Frame values: p(裏声) 0…1, CAL.CHEST (地声 frame, personal only), CAL.BREATHY (relaxed-gate breathy frame: votes 裏声 only), or null.
  *  Thresholds T = personal calibration or the defaults in RC:
  *   median p ≥ pF → 裏声, ≤ pM → ミックス, between → 裏声ミックス (2026-11-17; was: no judgment)
  *   息漏れ (median breathDb of the window): 裏声ミックス in the 裏声-side half of the zone (m ≥ (pF+pM)/2) with breath ≥ breathyDb → 裏声;
@@ -327,14 +321,6 @@ function thresholdsOf(P) {
   if (P) for (const k in T) if (typeof P[k] === 'number' && isFinite(P[k])) T[k] = P[k];
   return T;
 }
-/** Default 低音域 (RC.low.minHz ≤ f0 < maxHz): 1 (裏声 vote, f0 ≥ uraMinHz only), CAL.CHEST (地声 vote) or null; undefined = outside the region. */
-function lowValue(f) {
-  const L = RC.low;
-  if (!(f.f0 >= L.minHz && f.f0 < L.maxHz)) return undefined;
-  if (!(f.aperiodicity < RC.gateMaxAperiodicity && f.rmsDb > RC.gateMinRmsDbfs && RegisterClassifier.hasHarmonics(f))) return null;
-  const q = 1 / (1 + Math.exp(-(L.b + L.wh * f.hrichDb + L.wc * f.cpp8k + L.wf * log2(f.f0 / 440))));
-  return q >= L.conf ? (f.f0 >= L.uraMinHz ? 1 : null) : (q <= 1 - L.conf ? CAL.CHEST : null);
-}
 /** Per-frame smoother value (default or personal). */
 function frameValue(P, f) {
   const gateMin = P ? P.gateMinF0 : RC.gateMinF0;
@@ -343,7 +329,7 @@ function frameValue(P, f) {
     if (fr >= gateMin && fr <= RC.gateMaxF0 && f.rmsDb > RC.gateMinRmsDbfs && f.breathDb >= (P && isFinite(P.breathyDb) ? Math.max(RC.relaxedBreathMin, P.breathyDb) : RC.relaxedBreathMin) && f.breathDb <= RC.relaxedBreathMax) return CAL.BREATHY;
     return null;
   }
-  if (!P) { const lv = lowValue(f); if (lv !== undefined) return lv; return RegisterClassifier.isValid(f) ? RegisterClassifier.probabilityFalsetto(f) : null; }
+  if (!P) return RegisterClassifier.isValid(f) ? RegisterClassifier.probabilityFalsetto(f) : null;
   return personalValue(P, f);
 }
 
@@ -380,7 +366,7 @@ function calibrationFrames(mono, rate, category, opts) {
   opts = opts || {};
   const m44 = rate === 44100 ? mono : resampleAll(mono, rate, 44100);
   const chest = category === 'chest', lo = chest ? CAL.chestMinHz : CAL.sampleMinHz, t = opts.targetHz || 0;
-  const cl = new RegisterClassifier(44100, { yinMinHz: chest ? CAL.chestMinHz : RC.f0Min, noRelaxed: true }), n = cl.frameLength;
+  const cl = new RegisterClassifier(44100, { yinMinHz: chest ? CAL.chestMinHz : 0, noRelaxed: true }), n = cl.frameLength;
   let out = [];
   for (let s = 0; s < m44.length - n; s += cl.hop) {
     const f = cl.features(m44, s, true);
@@ -519,7 +505,7 @@ function personalValue(P, f) {
   const z = P.bias + P.wh * he + P.wc * f.cpp8k, [up, lo] = edgesAt(P, f.f0), Lf = logit(RC.pFalsetto), Lm = logit(RC.pMix);
   return sigmoid(Lm + (z - lo) * (Lf - Lm) / (up - lo));
 }
-const classifierOpts = (P) => P ? { yinMinHz: P.yinMinHz || RC.f0Min } : null; // personal: unchanged floors; relaxed gate stays on for judging
+const classifierOpts = (P) => (P && P.yinMinHz) ? { yinMinHz: P.yinMinHz } : null; // relaxed gate stays on for judging
 
 // ---------------- LocalAudioPipeline (原音 path) ----------------
 function analyzePitch16k(pcm16, onProgress) {
@@ -709,6 +695,6 @@ function buildStates(frames, vertical, selectedRange) {
 }
 
 const api = { roundHalfEven, pitchDetect, pitchNote, noteLabel, Resampler, resampleAll, fft, RC, REG, REG_LABEL, RegisterClassifier, Smoother,
-  analyzePitch16k, attachRegister, CAL, GUIDE, guideNotes, doremi, midiHz, calibrationFrames, buildCalibration, personalValue, frameValue, lowValue, thresholdsOf, analyzeMono, LivePitchStream, makeRange, defaultRange, BandRule, GaugeTimeline, buildStates };
+  analyzePitch16k, attachRegister, CAL, GUIDE, guideNotes, doremi, midiHz, calibrationFrames, buildCalibration, personalValue, frameValue, thresholdsOf, analyzeMono, LivePitchStream, makeRange, defaultRange, BandRule, GaugeTimeline, buildStates };
 if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PMCore = api;
 })(typeof self !== 'undefined' ? self : this);
