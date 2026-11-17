@@ -193,14 +193,25 @@ const live = (() => {
   const notice = (s) => { $('liveNotice').hidden = !s; $('liveNotice').textContent = s || ''; };
   function setButton() { const b = $('liveToggle'); b.classList.toggle('running', running); $('liveToggleText').textContent = running ? '停止' : '開始'; $('liveToggleIco').textContent = running ? '■' : '●'; b.setAttribute('aria-label', running ? 'リアルタイム表示を停止' : 'リアルタイム表示を開始'); }
   function draw(state) { const [w, h] = [cv.width, cv.height]; G.render(cv.getContext('2d'), w, h, state || G.emptyState(), tl ? tl.range : lastRange, false); }
+  const isIOS = () => /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const MIC = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 };
+  function help(text) { $('liveHelp').hidden = !text; $('liveHelpText').textContent = text || ''; $('liveReload').hidden = false; }
+  async function permState() { try { if (navigator.permissions && navigator.permissions.query) return (await navigator.permissions.query({ name: 'microphone' })).state; } catch (e) {} return 'unknown'; }
+  async function openMic() {
+    // 1回目の getUserMedia はタップの処理中に同期で呼ぶ（ここより前に await を置かない）。既定のマイクを使う。
+    const first = navigator.mediaDevices.getUserMedia({ audio: MIC, video: false });
+    try { return await first; }
+    catch (e) { if (e && (e.name === 'OverconstrainedError' || e.name === 'TypeError')) return await navigator.mediaDevices.getUserMedia({ audio: true, video: false }); throw e; }
+  }
   async function start() {
     if (running) return;
-    notice(''); setStatus('準備中…'); running = true; setButton(); const my = ++gen;
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.isSecureContext) { fail('このブラウザではマイクを使えません（https で開いてください）'); return; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.isSecureContext) { notice(''); help(''); running = true; fail('このブラウザではマイクを使えません（https で開いてください）'); return; }
+    setAudioSession('play-and-record');
+    const pending = openMic(); // ← タップ直後・最初の処理で許可の確認を出す（この前に await なし）
+    notice(''); help(''); setStatus('マイクの許可を確認中…'); running = true; setButton(); const my = ++gen;
     try {
-      setAudioSession('play-and-record');
       const AC = window.AudioContext || window.webkitAudioContext; ctx = new AC();
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 }, video: false });
+      stream = await pending;
       if (my !== gen) { stream.getTracks().forEach(t => t.stop()); return; }
       if (ctx.state === 'suspended') await ctx.resume();
       const track = stream.getAudioTracks()[0];
@@ -228,8 +239,20 @@ const live = (() => {
       setStatus('聞き取り中', true); lastT = performance.now(); loop();
     } catch (e) {
       if (my !== gen) return;
-      const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
-      fail(denied ? 'マイクが許可されていません（設定で許可できます）' : (e && e.name === 'NotFoundError' ? 'マイクが見つかりませんでした' : 'マイクを開始できませんでした'));
+      const n = e && e.name;
+      if (n === 'NotAllowedError' || n === 'SecurityError') {
+        const st = await permState();
+        if (my !== gen) return;
+        if (st === 'denied' || st === 'unknown') {
+          fail('マイクが許可されていません');
+          help(isIOS() ? 'マイクがブロックされています。アドレスバーの「ぁあ」→「Webサイトの設定」→「マイク」→「許可」にして、ページを再読み込みしてください。'
+            : 'マイクがブロックされています。アドレスバー左のアイコン →「権限」→「マイク」を許可して、ページを再読み込みしてください。');
+        } else { fail('マイクの許可が必要です'); help('もう一度「開始」を押して、確認画面で「許可」を選んでください。'); $('liveReload').hidden = true; }
+        return;
+      }
+      if (n === 'NotFoundError' || n === 'DevicesNotFoundError') { fail('マイクが見つかりませんでした'); help('マイクがつながっているか確認して、もう一度「開始」を押してください。'); $('liveReload').hidden = true; return; }
+      if (n === 'NotReadableError' || n === 'TrackStartError' || n === 'AbortError') { fail('マイクを使えませんでした'); help('ほかのアプリやタブがマイクを使っている可能性があります。閉じてから、もう一度「開始」を押してください。'); $('liveReload').hidden = true; return; }
+      fail('マイクを開始できませんでした'); help('もう一度「開始」を押してください。'); $('liveReload').hidden = true;
     }
   }
   function fail(msg) { teardown(); running = false; setButton(); setStatus(msg); }
@@ -254,6 +277,7 @@ const live = (() => {
     draw();
   }
   $('liveToggle').onclick = () => running ? stop() : start();
+  $('liveReload').onclick = () => location.reload();
   document.addEventListener('visibilitychange', () => { if (document.hidden && running) stop(); });
   draw();
   return { stop, draw: () => { if (!running) draw(); } };
