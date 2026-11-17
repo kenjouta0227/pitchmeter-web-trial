@@ -121,7 +121,7 @@ const RC = {
   //   also has clear peaks at f0/2 and 1.5·f0 (≥ subErr2Db above their valleys) or at f0/3 and 2·f0/3 (≥ subErr3Db),
   //   each no weaker than subErrRelDb below the f0 peak.
   //  bright & very periodic just above the gate (f0 < chestCppMaxHz with cpp8k ≥ chestCppMin) looks like a soft high 地声, not 裏声.
-  subErr2Db: 20.0, subErr3Db: 25.0, subErrRelDb: -40.0, subErrMinHz: 80.0, chestCppMaxHz: 480.0, chestCppMin: 4.2,
+  subErr2Db: 20.0, subErr3Db: 25.0, subErrRelDb: -40.0, subErrMinHz: 80.0, sepOctaveCents: 60.0, sepRefMinHz: 80.0, chestCppMaxHz: 480.0, chestCppMin: 4.2,
 };
 const REG = { none: 0, mix: 1, falsetto: 2, chest: 3, uraMix: 4 };
 const REG_LABEL = { 0: null, 1: 'ミックス', 2: '裏声', 3: '地声', 4: '裏声ミックス' }; // 3 (地声) is only produced with a personal calibration that includes 地声
@@ -263,9 +263,18 @@ class RegisterClassifier {
     const P = opts.personal || null, sm = new Smoother(P);
     if (mono.length <= n) return { frameCenters: centers, states, features: feats, pitch, probs };
     let cnt = 0;
+    const ref = opts.ref && opts.ref.length === mono.length ? opts.ref : null;
     for (let s = 0; s < mono.length - n; s += this.hop) {
-      const f = this.features(mono, s, !keep);
-      const p = frameValue(P, f);
+      let f = this.features(mono, s, !keep);
+      let p = frameValue(P, f);
+      // 2026-11-18 分離後の歌声で地声の基音が消える（伴奏側へ持っていかれる）と、f0 が 2〜5 倍に化けて「倍音の少ない高い声」= 裏声に見える。
+      // 裏声側の票のときだけ原音（分離前）の同じフレームを調べ、原音の f0 のちょうど 2〜5 倍なら分離の誤りとして原音の特徴で判定し直す。
+      if (ref && (p === CAL.BREATHY || (typeof p === 'number' && p !== CAL.CHEST && p > (P && isFinite(P.pMix) ? P.pMix : RC.pMix)))) {
+        // 原音側は低い地声（〜80 Hz）まで f0 を取れる YIN 床で見る（既定の 150 Hz 床だと 121 Hz の地声が 0 や 2 倍になる）
+        if (!this.refCl) this.refCl = new RegisterClassifier(this.sampleRate, { yinMinHz: RC.sepRefMinHz, noRelaxed: true });
+        const g = this.refCl.features(ref, s, true), a = f.f0 > 0 ? f.f0 : f.relaxedF0;
+        if (g.f0 > 0 && a > 0) { const r = a / g.f0, k = Math.round(r); if (k >= 2 && k <= 5 && Math.abs(1200 * log2(r / k)) <= RC.sepOctaveCents) { f = g; p = frameValue(P, g); } }
+      }
       states.push(sm.push(p, f.f0, f.breathDb)); probs.push(p); pitch.push(RegisterClassifier.fallbackCandidate(f));
       centers.push((s + n / 2) / this.sampleRate); if (keep) feats.push(f);
       if (onProgress && (++cnt % 200 === 0)) onProgress(s / mono.length);
@@ -540,10 +549,10 @@ function analyzePitch16k(pcm16, onProgress) {
   }
   return frames;
 }
-function attachRegister(frames, mono44100, onProgress, personal) {
+function attachRegister(frames, mono44100, onProgress, personal, refMono44100) { // refMono: 分離前の原音（分離した歌声を判定するとき）
   if (!frames.length) return frames;
   const P = personal || null, cl = new RegisterClassifier(44100, classifierOpts(P));
-  const track = cl.analyze(mono44100, { onProgress, personal: P });
+  const track = cl.analyze(mono44100, { onProgress, personal: P, ref: refMono44100 || null });
   if (!track.frameCenters.length) return frames;
   const first = track.frameCenters[0], hopS = cl.hop / cl.sampleRate;
   return frames.map(f => {
