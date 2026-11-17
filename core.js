@@ -694,7 +694,96 @@ function buildStates(frames, vertical, selectedRange) {
   return { range: tl.range, states };
 }
 
-const api = { roundHalfEven, pitchDetect, pitchNote, noteLabel, Resampler, resampleAll, fft, RC, REG, REG_LABEL, RegisterClassifier, Smoother,
+// ---------------- MovAudio (2026-11-18): AAC audio track out of .mov / .mp4 / .m4v, on-device only ----------------
+// Used when the browser's decodeAudioData cannot open a video container (e.g. iPhone screen recordings in Safari).
+// demux(ArrayBuffer) → { asc, sampleRate, channels, aot, frames: [Uint8Array], timescale, skip (media units), leadSec }
+const MovAudio = (() => {
+  const CONT = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl', 'edts', 'dinf']);
+  const fourcc = (u, o) => String.fromCharCode(u[o], u[o + 1], u[o + 2], u[o + 3]);
+  function boxes(dv, u, start, end, cb) {
+    let o = start;
+    while (o + 8 <= end) {
+      let size = dv.getUint32(o), hdr = 8; const type = fourcc(u, o + 4);
+      if (size === 1) { size = Number(dv.getBigUint64(o + 8)); hdr = 16; } else if (size === 0) size = end - o;
+      if (size < hdr || o + size > end) break;
+      cb(type, o + hdr, o + size); o += size;
+    }
+  }
+  function find(dv, u, start, end, path) { // first box along path, e.g. ['mdia','hdlr']
+    let res = null;
+    boxes(dv, u, start, end, (t, s, e) => { if (res || t !== path[0]) return; res = path.length === 1 ? [s, e] : find(dv, u, s, e, path.slice(1)); });
+    return res;
+  }
+  function esdsASC(u, s, e) { // scan the sample entry for 'esds' → DecoderSpecificInfo
+    for (let i = s; i + 8 < e; i++) {
+      if (u[i] !== 0x65 || fourcc(u, i) !== 'esds') continue;
+      let p = i + 8; const end = Math.min(e, i - 4 + ((u[i - 4] << 24) | (u[i - 3] << 16) | (u[i - 2] << 8) | u[i - 1]));
+      const desc = () => { const tag = u[p++]; let len = 0; for (let k = 0; k < 4; k++) { const b = u[p++]; len = (len << 7) | (b & 0x7f); if (!(b & 0x80)) break; } return [tag, len]; };
+      while (p < end) {
+        const [tag, len] = desc();
+        if (tag === 0x03) { p += 2; const fl = u[p++]; if (fl & 0x80) p += 2; if (fl & 0x40) p += 1 + u[p]; if (fl & 0x20) p += 2; }
+        else if (tag === 0x04) { const ot = u[p]; p += 13; if (ot !== 0x40 && ot !== 0x66 && ot !== 0x67 && ot !== 0x68) return null; }
+        else if (tag === 0x05) return u.slice(p, p + len);
+        else p += len;
+      }
+    }
+    return null;
+  }
+  function parseASC(a) {
+    let bit = 0; const rd = (n) => { let v = 0; for (let k = 0; k < n; k++, bit++) v = (v << 1) | ((a[bit >> 3] >> (7 - (bit & 7))) & 1); return v; };
+    let aot = rd(5); if (aot === 31) aot = 32 + rd(6);
+    const SR = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
+    let fi = rd(4), sr = fi === 15 ? rd(24) : SR[fi]; const ch = rd(4);
+    if (aot === 5 || aot === 29) { const efi = rd(4); if (efi === 15) rd(24); aot = rd(5); } // HE-AAC: ADTS carries the core (implicit SBR)
+    return { aot, fi: fi === 15 ? SR.indexOf(sr) : fi, sampleRate: sr, channels: ch };
+  }
+  function demux(buf) {
+    const u = new Uint8Array(buf), dv = new DataView(buf);
+    const moov = find(dv, u, 0, u.length, ['moov']); if (!moov) throw new Error('mov: no moov');
+    const mvhd = find(dv, u, moov[0], moov[1], ['mvhd']); const movieScale = mvhd ? dv.getUint32(mvhd[0] + (u[mvhd[0]] === 1 ? 20 : 12)) : 0;
+    let out = null;
+    boxes(dv, u, moov[0], moov[1], (t, s, e) => {
+      if (out || t !== 'trak') return;
+      const hdlr = find(dv, u, s, e, ['mdia', 'hdlr']); if (!hdlr || fourcc(u, hdlr[0] + 8) !== 'soun') return;
+      const mdhd = find(dv, u, s, e, ['mdia', 'mdhd']); const timescale = dv.getUint32(mdhd[0] + (u[mdhd[0]] === 1 ? 20 : 12));
+      const stbl = find(dv, u, s, e, ['mdia', 'minf', 'stbl']); if (!stbl) return;
+      const stsd = find(dv, u, stbl[0], stbl[1], ['stsd']); if (!stsd) return;
+      const es = stsd[0] + 8, esEnd = es + dv.getUint32(es); if (fourcc(u, es + 4) !== 'mp4a') return;
+      const asc = esdsASC(u, es + 8, esEnd); if (!asc) return;
+      const stsz = find(dv, u, stbl[0], stbl[1], ['stsz']), stsc = find(dv, u, stbl[0], stbl[1], ['stsc']);
+      const stco = find(dv, u, stbl[0], stbl[1], ['stco']), co64 = find(dv, u, stbl[0], stbl[1], ['co64']);
+      if (!stsz || !stsc || !(stco || co64)) return;
+      const fixed = dv.getUint32(stsz[0] + 4), n = dv.getUint32(stsz[0] + 8), sizes = new Array(n);
+      for (let i = 0; i < n; i++) sizes[i] = fixed || dv.getUint32(stsz[0] + 12 + 4 * i);
+      const co = stco || co64, nc = dv.getUint32(co[0] + 4), offs = new Array(nc);
+      for (let i = 0; i < nc; i++) offs[i] = stco ? dv.getUint32(co[0] + 8 + 4 * i) : Number(dv.getBigUint64(co[0] + 8 + 8 * i));
+      const ns = dv.getUint32(stsc[0] + 4), sc = []; for (let i = 0; i < ns; i++) { const b = stsc[0] + 8 + 12 * i; sc.push([dv.getUint32(b), dv.getUint32(b + 4)]); }
+      const frames = []; let k = 0;
+      for (let c = 0; c < nc && k < n; c++) {
+        let per = 0; for (const [first, spc] of sc) { if (first - 1 <= c) per = spc; else break; }
+        let o = offs[c]; for (let j = 0; j < per && k < n; j++, k++) { if (o + sizes[k] > u.length) { k = n; break; } frames.push(u.subarray(o, o + sizes[k])); o += sizes[k]; }
+      }
+      let skip = 0, leadSec = 0; const elst = find(dv, u, s, e, ['edts', 'elst']);
+      if (elst) { const v1 = u[elst[0]] === 1, cnt = dv.getUint32(elst[0] + 4); let p = elst[0] + 8;
+        for (let i = 0; i < cnt; i++) { const dur = v1 ? Number(dv.getBigUint64(p)) : dv.getUint32(p), mt = v1 ? Number(dv.getBigInt64(p + 8)) : dv.getInt32(p + 4); p += v1 ? 20 : 12;
+          if (mt === -1) { if (movieScale) leadSec += dur / movieScale; } else { skip = mt; break; } } }
+      out = Object.assign(parseASC(asc), { asc, frames, timescale, skip, leadSec });
+    });
+    if (!out || !out.frames.length) throw new Error('mov: no AAC audio track');
+    return out;
+  }
+  function toADTS(d) { // raw AAC frames → ADTS stream (decodable by decodeAudioData as audio/aac)
+    const prof = Math.min(Math.max(d.aot, 1), 4) - 1; let total = 0; for (const f of d.frames) total += f.length + 7;
+    const o = new Uint8Array(total); let p = 0;
+    for (const f of d.frames) { const L = f.length + 7;
+      o[p] = 0xff; o[p + 1] = 0xf1; o[p + 2] = (prof << 6) | (d.fi << 2) | ((d.channels >> 2) & 1); o[p + 3] = ((d.channels & 3) << 6) | (L >> 11);
+      o[p + 4] = (L >> 3) & 0xff; o[p + 5] = ((L & 7) << 5) | 0x1f; o[p + 6] = 0xfc; o.set(f, p + 7); p += L; }
+    return o;
+  }
+  return { demux, toADTS, parseASC };
+})();
+
+const api = { MovAudio, roundHalfEven, pitchDetect, pitchNote, noteLabel, Resampler, resampleAll, fft, RC, REG, REG_LABEL, RegisterClassifier, Smoother,
   analyzePitch16k, attachRegister, CAL, GUIDE, guideNotes, doremi, midiHz, calibrationFrames, buildCalibration, personalValue, frameValue, thresholdsOf, analyzeMono, LivePitchStream, makeRange, defaultRange, BandRule, GaugeTimeline, buildStates };
 if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PMCore = api;
 })(typeof self !== 'undefined' ? self : this);
