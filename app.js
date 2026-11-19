@@ -309,7 +309,7 @@ const file = (() => {
   function runProcess(analysis, audio, onProgress) {
     return new Promise((resolve, reject) => {
       const my = ++job; pendingReject = reject;
-      if (!worker) worker = new Worker('worker.js?v=20261119alpha');
+      if (!worker) worker = new Worker('worker.js?v=20261119alpha2');
       worker.onmessage = (e) => {
         const m = e.data; if (my !== job) return;
         if (m.type === 'progress') onProgress(m.value, m.label);
@@ -605,7 +605,7 @@ const file = (() => {
       let alphaError = null;
       if (transparent && alphaMovSupported()) {
         try { return await alphaMovie(audioLR, tl, onProgress, (f) => { cancelFn = f; }); }
-        catch (e) { if (e && e.message === 'cancel') throw e; alphaError = e; console.warn('alpha mov failed', e); onProgress(0); status('透過動画を作れなかったため、黒背景の動画で書き出しています…'); }
+        catch (e) { if (e && e.message === 'cancel') throw e; alphaError = e; e.reason = window.PMAlphaMov.reasonText(e); console.warn('alpha mov failed', e.reason, e); onProgress(0); status('透過動画を作れなかったため（理由：' + e.reason + '）、黒背景の動画で書き出しています…'); }
       }
       let mimes = transparent ? mimeList(true) : [], alpha = mimes.length > 0;
       if (!alpha) mimes = mimeList(false); // 透過に対応しないブラウザ: 黒背景で書き出す（iOS の HEVC alpha 非対応時と同じ扱い）
@@ -684,7 +684,7 @@ const file = (() => {
           completed.unshift(output); renderPast();
           progress(null); setTask(null);
           $('shareBtn').hidden = false; $('outDesc').hidden = false;
-          $('outDesc').textContent = `${kind === 'audio' ? 'WAV音声' : '動画'} / 最大${MAX_SECONDS}秒。完成ファイルは追加消費なしで保存し直せます。` + (out.prores ? '（透過つきの動画（.mov）です。共有から「ビデオを保存」で写真に入れられます）' : out.fellBack ? '（このブラウザでは透過動画を作れないため、黒背景の動画（MP4）で書き出しました）' : '');
+          $('outDesc').textContent = `${kind === 'audio' ? 'WAV音声' : '動画'} / 最大${MAX_SECONDS}秒。完成ファイルは追加消費なしで保存し直せます。` + (out.prores ? '（透過つきの動画（.mov）です。共有から「ビデオを保存」で写真に入れられます）' : out.fellBack ? (out.alphaError ? '（透過動画を作れなかったため（理由：' + out.alphaError.reason + '）、黒背景の動画（MP4）で書き出しました）' : '（このブラウザでは透過動画を作れないため、黒背景の動画（MP4）で書き出しました）') : '');
           status(kind === 'audio' ? '書き出しが完成しました' : '書き出しが完成しました。保存・共有先を選んでください。閉じた場合も完成ファイルは履歴に残ります。');
           ads.atExportCompletion(playing());
         } catch (e) {
@@ -754,14 +754,14 @@ const live = (() => {
       track.onended = () => stop('マイクが外れたので停止しました。つなぎ直してから「開始」を押してください。');
       devHandler = () => stop('マイクの接続が変わったので停止しました。もう一度「開始」を押してください。');
       if (navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', devHandler);
-      worker = new Worker('worker.js?v=20261119alpha'); tl = new C.GaugeTimeline([], C.defaultRange(), false); tl.frames = [];
+      worker = new Worker('worker.js?v=20261119alpha2'); tl = new C.GaugeTimeline([], C.defaultRange(), false); tl.frames = [];
       worker.onmessage = (e) => { const m = e.data; if (m.type === 'liveFrames' && m.gen === my && running) tl.append(m.frames.map(([hz, register]) => ({ hz, register }))); };
       worker.postMessage({ type: 'liveStart', rate: ctx.sampleRate, personal: samples.personal() });
       src = ctx.createMediaStreamSource(stream);
       const sink = ctx.createGain(); sink.gain.value = 0; sink.connect(ctx.destination);
       const send = (buf) => { if (running && my === gen) worker.postMessage({ type: 'livePush', samples: buf, gen: my }, [buf.buffer]); };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119alpha');
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119alpha2');
         if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => send(e.data);
@@ -973,7 +973,7 @@ const rec = (() => {
         $('recLevelBar').style.width = Math.min(100, Math.round(Math.sqrt(peak) * 140)) + '%';
         if (phase === 'rec') { chunks.push(buf); got += buf.length; if (got >= limit * ctx.sampleRate) finish(); } };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119alpha'); if (my !== gen) return;
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119alpha2'); if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => onChunk(e.data);
       } else { node = ctx.createScriptProcessor(2048, 1, 1); node.onaudioprocess = (e) => onChunk(new Float32Array(e.inputBuffer.getChannelData(0))); }
@@ -1130,7 +1130,7 @@ const col = (() => {
         $('colLevelBar').style.width = Math.min(100, Math.round(Math.sqrt(peak) * 140)) + '%';
         if (phase === 'rec') { chunks.push(buf); got += buf.length; if (got >= SECONDS * ctx.sampleRate) { got = SECONDS * ctx.sampleRate; finish(); } } };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119alpha'); if (my !== gen) return;
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119alpha2'); if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => onChunk(e.data);
       } else { node = ctx.createScriptProcessor(2048, 1, 1); node.onaudioprocess = (e) => onChunk(new Float32Array(e.inputBuffer.getChannelData(0))); }

@@ -70,18 +70,36 @@
   /** ブラウザ: 透過 .mov を書き出す。renderFrame(t, ctx) で 1 フレーム描く。 */
   function encoder() {
     let w = null, seq = 0; const pending = new Map();
-    const call = (msg, tr) => new Promise((res, rej) => { const id = ++seq; pending.set(id, { res, rej }); w.postMessage(Object.assign({ id }, msg), tr || []); });
+    const fail = (p, msg, why) => { clearTimeout(p.t); const e = new Error(msg); e.why = why; p.rej(e); };
+    // ms: 応答がない時間の上限。iPhone はメモリが足りないと worker を黙って止めることがあるため、待ち続けずに理由つきで失敗させる。
+    const call = (msg, tr, ms) => new Promise((res, rej) => {
+      const id = ++seq, p = { res, rej, t: 0 }; pending.set(id, p);
+      p.t = setTimeout(() => { if (pending.delete(id)) fail(p, 'timeout ' + msg.type, msg.type === 'init' ? 'timeout-load' : 'timeout'); }, ms);
+      w.postMessage(Object.assign({ id }, msg), tr || []);
+    });
     return {
       async init() {
-        w = new Worker('alpha-worker.js?v=' + (root.PM_ALPHA_V || '20261119alpha'));
-        w.onmessage = (e) => { const p = pending.get(e.data.id); if (!p) return; pending.delete(e.data.id); e.data.ok ? p.res(e.data) : p.rej(new Error(e.data.error)); };
-        w.onerror = (e) => { for (const p of pending.values()) p.rej(new Error('worker: ' + (e.message || 'error'))); pending.clear(); };
-        await call({ type: 'init' });
+        w = new Worker('alpha-worker.js?v=' + (root.PM_ALPHA_V || '20261119alpha2'));
+        w.onmessage = (e) => { const p = pending.get(e.data.id); if (!p) return; pending.delete(e.data.id); clearTimeout(p.t); if (e.data.ok) p.res(e.data); else fail(p, e.data.error, e.data.why || 'other'); };
+        w.onerror = (e) => { const m = String(e && e.message || 'error'); for (const p of pending.values()) fail(p, 'worker: ' + m, /memory/i.test(m) ? 'memory' : 'crash'); pending.clear(); };
+        await call({ type: 'init' }, null, 180000);
       },
-      async encode(rgba, width, height, q) { const r = await call({ type: 'encode', rgba, w: width, h: height, q }, [rgba]); return new Uint8Array(r.data); },
-      close() { if (w) w.terminate(); w = null; for (const p of pending.values()) p.rej(new Error('cancel')); pending.clear(); },
+      async encode(rgba, width, height, q) { const r = await call({ type: 'encode', rgba, w: width, h: height, q }, [rgba], 120000); return new Uint8Array(r.data); },
+      close() { if (w) w.terminate(); w = null; for (const p of pending.values()) { clearTimeout(p.t); p.rej(new Error('cancel')); } pending.clear(); },
     };
   }
-  const api = { buildMov, splitProRes, pcm16, encoder };
+  /** 失敗理由（why）を短い日本語に */
+  function reasonText(e) {
+    const why = e && e.why, m = String(e && e.message || e || '');
+    if (why === 'load' || why === 'timeout-load') return '読み込み失敗';
+    if (why === 'compile') return '読み込み失敗（準備できず）';
+    if (why === 'memory' || e instanceof RangeError || /out of memory|allocation/i.test(m)) return 'メモリ不足';
+    if (why === 'crash') return '処理が止まりました（メモリ不足の可能性）';
+    if (why === 'timeout') return '時間切れ（メモリ不足の可能性）';
+    if (why === 'encode') return 'エンコード失敗';
+    if (/canvas|getImageData|frame|フレーム/i.test(m)) return '画像の作成に失敗';
+    return 'その他のエラー';
+  }
+  const api = { buildMov, splitProRes, pcm16, encoder, reasonText };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PMAlphaMov = api;
 })(typeof self !== 'undefined' ? self : this);
