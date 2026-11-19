@@ -1,0 +1,87 @@
+diff -ru a/source/CMakeLists.txt b/source/CMakeLists.txt
+--- a/source/CMakeLists.txt	2024-11-22 21:07:34.000000000 +0900
++++ b/source/CMakeLists.txt	2026-11-19 16:31:42.515048855 +0900
+@@ -261,7 +261,7 @@
+     elseif(X86 AND NOT X64)
+         string(FIND "${CMAKE_CXX_FLAGS}" "-march" marchPos)
+         if(marchPos LESS "0")
+-            add_definitions(-march=i686)
++            #wasm
+             if(WIN32 AND NOT INTEL_CXX AND NOT CLANG AND
+                CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 6.0 AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.0)
+                 add_definitions(-mpreferred-stack-boundary=2)
+diff -ru a/source/encoder/encoder.cpp b/source/encoder/encoder.cpp
+--- a/source/encoder/encoder.cpp	2024-11-22 21:07:34.000000000 +0900
++++ b/source/encoder/encoder.cpp	2026-11-19 16:30:26.131182478 +0900
+@@ -461,7 +461,11 @@
+ 
+     for (int i = 0; i < m_param->frameNumThreads; i++)
+     {
++#ifdef X265_SYNC_THREADS
++        m_frameEncoder[i]->syncInit();
++#else
+         m_frameEncoder[i]->start();
++#endif
+         m_frameEncoder[i]->m_done.wait(); /* wait for thread to initialize */
+     }
+ 
+diff -ru a/source/encoder/entropy.cpp b/source/encoder/entropy.cpp
+--- a/source/encoder/entropy.cpp	2024-11-22 21:07:34.000000000 +0900
++++ b/source/encoder/entropy.cpp	2026-11-19 16:40:49.346092244 +0900
+@@ -811,7 +811,11 @@
+     if (vui.videoSignalTypePresentFlag)
+     {
+         WRITE_CODE(vui.videoFormat, 3, "video_format");
++#if ENABLE_ALPHA
++        WRITE_FLAG(layer > 0 ? 1 : vui.videoFullRangeFlag, "video_full_range_flag"); // Apple HEVC with Alpha: alpha layer is full range
++#else
+         WRITE_FLAG(vui.videoFullRangeFlag, "video_full_range_flag");
++#endif
+         WRITE_FLAG(vui.colourDescriptionPresentFlag, "colour_description_present_flag");
+         if (vui.colourDescriptionPresentFlag)
+         {
+diff -ru a/source/encoder/frameencoder.cpp b/source/encoder/frameencoder.cpp
+--- a/source/encoder/frameencoder.cpp	2024-11-22 21:07:34.000000000 +0900
++++ b/source/encoder/frameencoder.cpp	2026-11-19 16:30:26.131182478 +0900
+@@ -287,10 +287,28 @@
+             return false;
+     }
+ 
++#ifdef X265_SYNC_THREADS
++    /* WebAssembly (no threads): compress in the caller */
++    for (int layer = 0; layer < m_param->numLayers; layer++)
++        compressFrame(layer);
++    m_done.trigger();
++#else
+     m_enable.trigger();
++#endif
+     return true;
+ }
+ 
++#ifdef X265_SYNC_THREADS
++void FrameEncoder::syncInit()
++{
++    m_tld = new ThreadLocalData;
++    m_tld->analysis.initSearch(*m_param, m_top->m_scalingList);
++    m_tld->analysis.create(NULL);
++    m_localTldIdx = 0;
++    m_done.trigger();
++}
++#endif
++
+ void FrameEncoder::threadMain()
+ {
+     THREAD_NAME("Frame", m_jpId);
+diff -ru a/source/encoder/frameencoder.h b/source/encoder/frameencoder.h
+--- a/source/encoder/frameencoder.h	2024-11-22 21:07:34.000000000 +0900
++++ b/source/encoder/frameencoder.h	2026-11-19 16:30:26.131182478 +0900
+@@ -187,6 +187,9 @@
+ 
+     /* triggers encode of a new frame by the worker thread */
+     bool startCompressFrame(Frame* curFrame[MAX_LAYERS]);
++#ifdef X265_SYNC_THREADS
++    void syncInit();
++#endif
+ 
+     /* blocks until worker thread is done, returns access unit */
+     Frame **getEncodedPicture(NALList& list);

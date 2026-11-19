@@ -1,0 +1,17 @@
+hevca.js / hevca.wasm — x265 4.1 (HEVC encoder, alpha layer) built for WebAssembly
+License: GPL-2.0-or-later (see ../ffmpeg/COPYING.GPLv2.txt). Source:
+  x265 4.1: https://bitbucket.org/multicoreware/x265_git/downloads/x265_4.1.tar.gz
+  Changes: x265-4.1-wasm.patch (this folder)  — run frame encoding in the caller (no threads in
+           WebAssembly), alpha layer SPS video_full_range_flag = 1 (Apple HEVC with Alpha profile),
+           CMake: no -march=i686 for wasm.
+  Wrapper: hevca.c (this folder)
+Build (Emscripten 7.0.0, CMake 3.31, Ninja):
+  cmake -G Ninja x265_4.1/source -DENABLE_ALPHA=ON -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_ASSEMBLY=OFF \
+        -DENABLE_LIBNUMA=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-O3 -msimd128 -DX265_SYNC_THREADS" \
+        -DCMAKE_C_FLAGS="-O3 -msimd128" -DCMAKE_TOOLCHAIN_FILE=<emsdk>/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake
+  ninja
+  emcc -O3 -msimd128 -DENABLE_ALPHA=1 -c hevca.c -I. -Ix265_4.1/source -o hevca.o
+  em++ -O3 -msimd128 hevca.o libx265.a -o hevca.js -sMODULARIZE=1 -sEXPORT_NAME=createHevcA -sALLOW_MEMORY_GROWTH=1 \
+       -sINITIAL_MEMORY=64MB -sMAXIMUM_MEMORY=1GB -sENVIRONMENT=worker,node -sSTACK_SIZE=2MB \
+       -sEXPORTED_FUNCTIONS=_hv_open,_hv_out,_hv_outn,_hv_encode,_hv_malloc,_hv_close,_hv_lastkey,_hv_npic,_free \
+       -sEXPORTED_RUNTIME_METHODS=HEAPU8,stringToNewUTF8
