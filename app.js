@@ -309,7 +309,7 @@ const file = (() => {
   function runProcess(analysis, audio, onProgress) {
     return new Promise((resolve, reject) => {
       const my = ++job; pendingReject = reject;
-      if (!worker) worker = new Worker('worker.js?v=20261119sou');
+      if (!worker) worker = new Worker('worker.js?v=20261119exp');
       worker.onmessage = (e) => {
         const m = e.data; if (my !== job) return;
         if (m.type === 'progress') onProgress(m.value, m.label);
@@ -551,24 +551,31 @@ const file = (() => {
       const f = new Float32Array(buf, 44, n * 2); for (let i = 0; i < n; i++) { f[2 * i] = l[i]; f[2 * i + 1] = r[i]; }
       return new Blob([buf], { type: 'audio/wav' });
     }
-    function pickMime(alpha) {
-      const MR = window.MediaRecorder; if (!MR || !MR.isTypeSupported) return null;
-      const list = alpha ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus'] : ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4;codecs=avc1,mp4a', 'video/mp4;codecs=avc1.42E01E,opus', 'video/mp4;codecs=avc1,opus', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
-      return list.find(t => MR.isTypeSupported(t)) || null;
+    // 2026-11-19: iPhone / iPad / Mac の Safari・iPhone の Chrome（どれも WebKit）は WebM を録画できても「写真」や編集アプリで使えない。
+    // 透過（WebM）は WebKit 以外だけ。WebKit では透過メーターも黒背景の MP4 で書き出す（iOS アプリの HEVC 透過非対応時と同じ扱い）。
+    const appleWebKit = () => /Apple/.test(navigator.vendor || '') || /iP(hone|ad|od)/.test(navigator.userAgent || '') || (/Macintosh/.test(navigator.userAgent || '') && navigator.maxTouchPoints > 1);
+    function mimeList(alpha) {
+      const MR = window.MediaRecorder; if (!MR) return [];
+      const list = alpha ? (appleWebKit() ? [] : ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus'])
+        : ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4;codecs=avc1,mp4a', 'video/mp4;codecs=avc1.42E01E,opus', 'video/mp4;codecs=avc1,opus', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+      const usable = appleWebKit() ? list.filter(t => !/webm/.test(t)) : list; // iPhone は WebM を写真に保存できない → MP4 のみ
+      return MR.isTypeSupported ? usable.filter(t => { try { return MR.isTypeSupported(t); } catch (e) { return false; } }) : (alpha ? [] : ['video/mp4']);
     }
+    function pickMime(alpha) { return mimeList(alpha)[0] || null; }
     const overlaySize = (w, h) => { const k = Math.min(1, 1280 / Math.max(w, h)); return { w: Math.max(2, Math.floor(w * k / 2) * 2), h: Math.max(2, Math.floor(h * k / 2) * 2) }; };
     async function movie(ac, kind, audioLR, tl, onProgress) {
       const transparent = kind === 'transparent';
-      let mime = pickMime(transparent), alpha = transparent && !!mime;
-      if (transparent && !mime) mime = pickMime(false); // 透過に対応しないブラウザ: 黒背景で書き出す（iOS の HEVC alpha 非対応時と同じ扱い）
-      if (!mime || !HTMLCanvasElement.prototype.captureStream) throw new Error('この端末のブラウザでは動画を書き出せません。');
+      let mimes = transparent ? mimeList(true) : [], alpha = mimes.length > 0;
+      if (!alpha) mimes = mimeList(false); // 透過に対応しないブラウザ: 黒背景で書き出す（iOS の HEVC alpha 非対応時と同じ扱い）
+      if (!mimes.length || !HTMLCanvasElement.prototype.captureStream) throw new Error('この端末のブラウザでは動画を書き出せません。Safari か Chrome の最新版でお試しください。');
       const size = isVideo ? overlaySize(sourceSize.w, sourceSize.h) : { w: 720, h: 1280 };
       const cv = document.createElement('canvas'); cv.width = size.w; cv.height = size.h;
+      cv.setAttribute('aria-hidden', 'true'); cv.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01;pointer-events:none;z-index:-1'; document.body.appendChild(cv);
       const ctx = cv.getContext('2d', { alpha: true }), gc = document.createElement('canvas'); gc.width = size.w; gc.height = size.h; const gx = gc.getContext('2d');
       const seconds = Math.min(duration, MAX_SECONDS), app = appearance();
       let v = null;
       if (isVideo && !transparent) { v = document.createElement('video'); v.muted = true; v.playsInline = true; v.setAttribute('playsinline', ''); v.preload = 'auto'; v.src = url;
-        await new Promise((res, rej) => { v.oncanplay = res; v.onerror = () => rej(new Error('video')); v.load(); }); }
+        try { await new Promise((res, rej) => { v.oncanplay = res; v.onerror = () => rej(new Error('元の動画を読み込めませんでした')); v.load(); }); } catch (e) { cv.remove(); throw e; } }
       const dest = ac.createMediaStreamDestination(), buf = ac.createBuffer(2, audioLR[0].length, 44100);
       buf.copyToChannel(audioLR[0], 0); buf.copyToChannel(audioLR[1], 1);
       const src = ac.createBufferSource(); src.buffer = buf; src.connect(dest);
@@ -581,10 +588,17 @@ const file = (() => {
       };
       frame(0);
       const stream = new MediaStream([...cv.captureStream(30).getVideoTracks(), ...dest.stream.getAudioTracks()]);
-      const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8000000, audioBitsPerSecond: 192000 });
+      let rec = null, mime = '';
+      for (const t of mimes) { // 最初に作れた形式で録画（Safari は isTypeSupported が true でも作れないことがある）
+        try { rec = new MediaRecorder(stream, Object.assign(t ? { mimeType: t } : {}, { videoBitsPerSecond: 8000000, audioBitsPerSecond: 192000 })); mime = t || rec.mimeType || 'video/mp4'; break; }
+        catch (e) { rec = null; }
+      }
+      if (!rec) { cv.remove(); throw new Error('この端末のブラウザでは動画を書き出せません。Safari か Chrome の最新版でお試しください。'); }
+      if (appleWebKit() && /webm/.test(rec.mimeType || '')) { cv.remove(); throw new Error('この端末のブラウザでは MP4 動画を書き出せません。iOS を最新にしてお試しください。'); }
+      if (mime.startsWith('video/mp4')) alpha = false;
       const chunks = []; rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
       let stopped = false, tick = 0;
-      const finished = new Promise((res, rej) => { rec.onstop = () => res(); rec.onerror = (e) => rej(e.error || new Error('rec')); });
+      const finished = new Promise((res, rej) => { rec.onstop = () => res(); rec.onerror = (e) => rej(new Error('録画エラー: ' + ((e && e.error && (e.error.name || e.error.message)) || 'MediaRecorder'))); });
       cancelFn = () => { stopped = true; try { rec.stop(); } catch (e) {} try { src.stop(); } catch (e) {} if (v) v.pause(); };
       if (ac.state !== 'running') await ac.resume();
       rec.start(1000); const t0 = ac.currentTime + 0.05; src.start(t0); if (v) { v.currentTime = 0; await v.play().catch(() => {}); }
@@ -598,10 +612,12 @@ const file = (() => {
         };
         tick = requestAnimationFrame(step);
       });
-      await finished; cancelFn = null;
-      if (v) { v.removeAttribute('src'); v.load(); }
-      const type = mime.split(';')[0], ext = type === 'video/mp4' ? 'mp4' : 'webm';
-      return { blob: new Blob(chunks, { type }), ext, alpha, fellBack: transparent && !alpha };
+      try { await Promise.race([finished, new Promise((res) => setTimeout(res, 8000))]); } // 止まらない録画で固まらない
+      finally { cancelFn = null; cv.remove(); if (v) { v.removeAttribute('src'); v.load(); } }
+      if (stopped && !(Math.max(0, ac.currentTime - t0) >= seconds - 0.2) && !chunks.length) throw new Error('cancel');
+      const type = (rec.mimeType || mime).split(';')[0] || 'video/mp4', ext = /mp4/.test(type) ? 'mp4' : 'webm';
+      const blob = new Blob(chunks, { type }); if (blob.size < 1024) throw new Error('書き出した動画が空でした。もう一度お試しください。画面を開いたまま（ほかのアプリに切り替えずに）お待ちください。');
+      return { blob, ext, alpha, fellBack: transparent && !alpha };
     }
     return {
       active: () => !!cancelFn, cancel() { if (cancelFn) cancelFn(); cancelFn = null; },
@@ -626,12 +642,13 @@ const file = (() => {
           completed.unshift(output); renderPast();
           progress(null); setTask(null);
           $('shareBtn').hidden = false; $('outDesc').hidden = false;
-          $('outDesc').textContent = `${kind === 'audio' ? 'WAV音声' : '動画'} / 最大${MAX_SECONDS}秒。完成ファイルは追加消費なしで保存し直せます。` + (out.fellBack ? '（このブラウザは透過動画に対応していないため、黒背景で書き出しました）' : '');
+          $('outDesc').textContent = `${kind === 'audio' ? 'WAV音声' : '動画'} / 最大${MAX_SECONDS}秒。完成ファイルは追加消費なしで保存し直せます。` + (out.fellBack ? '（このブラウザでは透過動画を作れないため、黒背景の動画（MP4）で書き出しました）' : '');
           status(kind === 'audio' ? '書き出しが完成しました' : '書き出しが完成しました。保存・共有先を選んでください。閉じた場合も完成ファイルは履歴に残ります。');
           ads.atExportCompletion(playing());
         } catch (e) {
           if (!task) return; progress(null); setTask(null);
-          status(e && /ブラウザ/.test(e.message || '') ? e.message : '書き出し・解析を完了できませんでした。完成ファイル一覧と試用残数を確認してください。');
+          const m = (e && e.message) || ''; console.warn('export failed', e);
+          status(/ブラウザ|空でした|MP4/.test(m) ? m : '書き出しできませんでした' + (m && m !== 'cancel' ? '（' + m + '）' : '') + '。もう一度お試しください。試用回数は消費していません。');
         } finally { if (ac) ac.close().catch(() => {}); }
       },
     };
@@ -639,9 +656,17 @@ const file = (() => {
   $('exVideo').onclick = () => exporter.run('video');
   $('exAlpha').onclick = () => exporter.run('transparent');
   $('exAudio').onclick = () => exporter.run('audio');
-  async function share(f) {
-    try { if (navigator.canShare && navigator.canShare({ files: [f] })) { await navigator.share({ files: [f] }); return; } } catch (e) { if (e && e.name === 'AbortError') return; }
-    const a = document.createElement('a'), u = URL.createObjectURL(f); a.href = u; a.download = f.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 60000);
+  async function share(f) { // タップ（ユーザー操作）の中で呼ぶ: iPhone の Safari は共有シートの「ビデオを保存」で写真に保存できる
+    if (navigator.canShare && navigator.share) {
+      let ok = false; try { ok = navigator.canShare({ files: [f] }); } catch (e) { ok = false; }
+      if (ok) {
+        try { await navigator.share({ files: [f] }); return; }
+        catch (e) { if (e && e.name === 'AbortError') return; console.warn('share failed', e); }
+      }
+    }
+    try { const a = document.createElement('a'), u = URL.createObjectURL(f); a.href = u; a.download = f.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 120000);
+      status('保存を始めました。見つからないときは「ファイル」アプリのダウンロードを確認してください。'); }
+    catch (e) { status('保存・共有できませんでした。もう一度「完成したファイルを保存・共有」を押してください。'); }
   }
   $('shareBtn').onclick = () => { if (output) share(output.file); };
   function renderPast() {
@@ -687,14 +712,14 @@ const live = (() => {
       track.onended = () => stop('マイクが外れたので停止しました。つなぎ直してから「開始」を押してください。');
       devHandler = () => stop('マイクの接続が変わったので停止しました。もう一度「開始」を押してください。');
       if (navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', devHandler);
-      worker = new Worker('worker.js?v=20261119sou'); tl = new C.GaugeTimeline([], C.defaultRange(), false); tl.frames = [];
+      worker = new Worker('worker.js?v=20261119exp'); tl = new C.GaugeTimeline([], C.defaultRange(), false); tl.frames = [];
       worker.onmessage = (e) => { const m = e.data; if (m.type === 'liveFrames' && m.gen === my && running) tl.append(m.frames.map(([hz, register]) => ({ hz, register }))); };
       worker.postMessage({ type: 'liveStart', rate: ctx.sampleRate, personal: samples.personal() });
       src = ctx.createMediaStreamSource(stream);
       const sink = ctx.createGain(); sink.gain.value = 0; sink.connect(ctx.destination);
       const send = (buf) => { if (running && my === gen) worker.postMessage({ type: 'livePush', samples: buf, gen: my }, [buf.buffer]); };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119sou');
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119exp');
         if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => send(e.data);
@@ -906,7 +931,7 @@ const rec = (() => {
         $('recLevelBar').style.width = Math.min(100, Math.round(Math.sqrt(peak) * 140)) + '%';
         if (phase === 'rec') { chunks.push(buf); got += buf.length; if (got >= limit * ctx.sampleRate) finish(); } };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119sou'); if (my !== gen) return;
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119exp'); if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => onChunk(e.data);
       } else { node = ctx.createScriptProcessor(2048, 1, 1); node.onaudioprocess = (e) => onChunk(new Float32Array(e.inputBuffer.getChannelData(0))); }
@@ -1063,7 +1088,7 @@ const col = (() => {
         $('colLevelBar').style.width = Math.min(100, Math.round(Math.sqrt(peak) * 140)) + '%';
         if (phase === 'rec') { chunks.push(buf); got += buf.length; if (got >= SECONDS * ctx.sampleRate) { got = SECONDS * ctx.sampleRate; finish(); } } };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119sou'); if (my !== gen) return;
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119exp'); if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => onChunk(e.data);
       } else { node = ctx.createScriptProcessor(2048, 1, 1); node.onaudioprocess = (e) => onChunk(new Float32Array(e.inputBuffer.getChannelData(0))); }
