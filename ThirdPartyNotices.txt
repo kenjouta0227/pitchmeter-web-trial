@@ -6585,3 +6585,19 @@ SOFTWARE.
    limitations under the License.
 
 
+
+------------------------------------------------------------
+ffmpeg.wasm core (@ffmpeg/core 0.12.10) / FFmpeg
+Files: ffmpeg/ffmpeg-core.js, ffmpeg/ffmpeg-core.wasm.part0, ffmpeg/ffmpeg-core.wasm.part1
+(ffmpeg-core.wasm.part0 + part1 are the unmodified ffmpeg-core.wasm split into two
+ pieces only for hosting; they are joined back in the browser.)
+Used only on the device, to encode transparent meter videos (ProRes 4444) locally.
+No audio, video or personal data is sent anywhere.
+
+License: GNU General Public License v2.0 or later (GPL-2.0-or-later).
+Full license text: ffmpeg/COPYING.GPLv2.txt
+Corresponding source:
+  ffmpeg.wasm  https://github.com/ffmpegwasm/ffmpeg.wasm/tree/v0.12.10
+  npm package  https://www.npmjs.com/package/@ffmpeg/core/v/0.12.10
+  FFmpeg       https://ffmpeg.org/download.html  (https://github.com/FFmpeg/FFmpeg)
+Copyright (c) the FFmpeg developers and the ffmpeg.wasm contributors.

@@ -309,7 +309,7 @@ const file = (() => {
   function runProcess(analysis, audio, onProgress) {
     return new Promise((resolve, reject) => {
       const my = ++job; pendingReject = reject;
-      if (!worker) worker = new Worker('worker.js?v=20261119exp');
+      if (!worker) worker = new Worker('worker.js?v=20261119alpha');
       worker.onmessage = (e) => {
         const m = e.data; if (my !== job) return;
         if (m.type === 'progress') onProgress(m.value, m.label);
@@ -563,8 +563,50 @@ const file = (() => {
     }
     function pickMime(alpha) { return mimeList(alpha)[0] || null; }
     const overlaySize = (w, h) => { const k = Math.min(1, 1280 / Math.max(w, h)); return { w: Math.max(2, Math.floor(w * k / 2) * 2), h: Math.max(2, Math.floor(h * k / 2) * 2) }; };
+    // 2026-11-19: iPhone の Safari など（WebKit）で「透過メーターのみ」を本当に透過で書き出す。
+    // Safari の録画（MediaRecorder）・WebCodecs は透過を残せないため、端末の中で ProRes 4444（透過あり）の .mov を作る（alphamov.js / alpha-worker.js / ffmpeg/）。
+    // iOS アプリは HEVC（透過あり）の .mov。どちらも 写真・動画編集アプリで透過素材として使える形式。失敗したら黒背景の MP4 に切り替える。
+    const alphaMovSupported = () => appleWebKit() && !!window.PMAlphaMov && typeof WebAssembly === 'object' && !!window.Worker;
+    async function alphaMovie(audioLR, tl, onProgress, setCancel) {
+      const A = window.PMAlphaMov, enc = A.encoder(); let cancelled = false;
+      setCancel(() => { cancelled = true; enc.close(); });
+      try {
+        status('透過動画の準備をしています…（初回は約32MBを読み込みます）');
+        await enc.init();
+        const size = isVideo ? overlaySize(sourceSize.w, sourceSize.h) : { w: 720, h: 1280 };
+        const seconds = Math.min(duration, MAX_SECONDS), app = appearance(), N = Math.max(1, Math.ceil(seconds * 30));
+        const gc = document.createElement('canvas'); gc.width = size.w; gc.height = size.h; const gx = gc.getContext('2d', { alpha: true, willReadFrequently: true });
+        const frameBytes = size.w * size.h * 4, B = Math.max(1, Math.min(30, Math.floor(24e6 / frameBytes)));
+        const q = seconds > 120 ? 13 : seconds > 60 ? 11 : 9; // 長い動画はファイルが大きくなりすぎないよう少し圧縮を強める
+        const chunks = [], sizes = [];
+        status('透過動画を書き出しています…');
+        for (let i = 0; i < N; i += B) {
+          if (cancelled) throw new Error('cancel');
+          const n = Math.min(B, N - i), buf = new Uint8Array(frameBytes * n);
+          for (let k = 0; k < n; k++) {
+            const t = (i + k) / 30;
+            G.render(gx, size.w, size.h, tl.states[Math.min(tl.states.length - 1, Math.max(0, Math.round(t * 30)))], tl.range, app);
+            buf.set(gx.getImageData(0, 0, size.w, size.h).data, k * frameBytes);
+          }
+          const out = await enc.encode(buf.buffer, size.w, size.h, q);
+          sizes.push(...A.splitProRes(out)); chunks.push(new Blob([out]));
+          onProgress(Math.min(1, (i + n) / N));
+          await new Promise((r) => setTimeout(r, 0));
+        }
+        if (sizes.length !== N) throw new Error('フレーム数が合いません');
+        const samples = Math.min(audioLR[0].length, Math.round(N / 30 * 44100));
+        const pcm = new Blob([A.pcm16(audioLR[0].subarray(0, samples), audioLR[1].subarray(0, samples))]);
+        const blob = A.buildMov({ width: size.w, height: size.h, fps: 30, chunks, sizes }, { rate: 44100, channels: 2, pcm });
+        return { blob, ext: 'mov', alpha: true, prores: true };
+      } finally { enc.close(); setCancel(null); }
+    }
     async function movie(ac, kind, audioLR, tl, onProgress) {
       const transparent = kind === 'transparent';
+      let alphaError = null;
+      if (transparent && alphaMovSupported()) {
+        try { return await alphaMovie(audioLR, tl, onProgress, (f) => { cancelFn = f; }); }
+        catch (e) { if (e && e.message === 'cancel') throw e; alphaError = e; console.warn('alpha mov failed', e); onProgress(0); status('透過動画を作れなかったため、黒背景の動画で書き出しています…'); }
+      }
       let mimes = transparent ? mimeList(true) : [], alpha = mimes.length > 0;
       if (!alpha) mimes = mimeList(false); // 透過に対応しないブラウザ: 黒背景で書き出す（iOS の HEVC alpha 非対応時と同じ扱い）
       if (!mimes.length || !HTMLCanvasElement.prototype.captureStream) throw new Error('この端末のブラウザでは動画を書き出せません。Safari か Chrome の最新版でお試しください。');
@@ -617,7 +659,7 @@ const file = (() => {
       if (stopped && !(Math.max(0, ac.currentTime - t0) >= seconds - 0.2) && !chunks.length) throw new Error('cancel');
       const type = (rec.mimeType || mime).split(';')[0] || 'video/mp4', ext = /mp4/.test(type) ? 'mp4' : 'webm';
       const blob = new Blob(chunks, { type }); if (blob.size < 1024) throw new Error('書き出した動画が空でした。もう一度お試しください。画面を開いたまま（ほかのアプリに切り替えずに）お待ちください。');
-      return { blob, ext, alpha, fellBack: transparent && !alpha };
+      return { blob, ext, alpha, fellBack: transparent && !alpha, alphaError };
     }
     return {
       active: () => !!cancelFn, cancel() { if (cancelFn) cancelFn(); cancelFn = null; },
@@ -642,7 +684,7 @@ const file = (() => {
           completed.unshift(output); renderPast();
           progress(null); setTask(null);
           $('shareBtn').hidden = false; $('outDesc').hidden = false;
-          $('outDesc').textContent = `${kind === 'audio' ? 'WAV音声' : '動画'} / 最大${MAX_SECONDS}秒。完成ファイルは追加消費なしで保存し直せます。` + (out.fellBack ? '（このブラウザでは透過動画を作れないため、黒背景の動画（MP4）で書き出しました）' : '');
+          $('outDesc').textContent = `${kind === 'audio' ? 'WAV音声' : '動画'} / 最大${MAX_SECONDS}秒。完成ファイルは追加消費なしで保存し直せます。` + (out.prores ? '（透過つきの動画（.mov）です。共有から「ビデオを保存」で写真に入れられます）' : out.fellBack ? '（このブラウザでは透過動画を作れないため、黒背景の動画（MP4）で書き出しました）' : '');
           status(kind === 'audio' ? '書き出しが完成しました' : '書き出しが完成しました。保存・共有先を選んでください。閉じた場合も完成ファイルは履歴に残ります。');
           ads.atExportCompletion(playing());
         } catch (e) {
@@ -712,14 +754,14 @@ const live = (() => {
       track.onended = () => stop('マイクが外れたので停止しました。つなぎ直してから「開始」を押してください。');
       devHandler = () => stop('マイクの接続が変わったので停止しました。もう一度「開始」を押してください。');
       if (navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', devHandler);
-      worker = new Worker('worker.js?v=20261119exp'); tl = new C.GaugeTimeline([], C.defaultRange(), false); tl.frames = [];
+      worker = new Worker('worker.js?v=20261119alpha'); tl = new C.GaugeTimeline([], C.defaultRange(), false); tl.frames = [];
       worker.onmessage = (e) => { const m = e.data; if (m.type === 'liveFrames' && m.gen === my && running) tl.append(m.frames.map(([hz, register]) => ({ hz, register }))); };
       worker.postMessage({ type: 'liveStart', rate: ctx.sampleRate, personal: samples.personal() });
       src = ctx.createMediaStreamSource(stream);
       const sink = ctx.createGain(); sink.gain.value = 0; sink.connect(ctx.destination);
       const send = (buf) => { if (running && my === gen) worker.postMessage({ type: 'livePush', samples: buf, gen: my }, [buf.buffer]); };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119exp');
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119alpha');
         if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => send(e.data);
@@ -931,7 +973,7 @@ const rec = (() => {
         $('recLevelBar').style.width = Math.min(100, Math.round(Math.sqrt(peak) * 140)) + '%';
         if (phase === 'rec') { chunks.push(buf); got += buf.length; if (got >= limit * ctx.sampleRate) finish(); } };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119exp'); if (my !== gen) return;
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119alpha'); if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => onChunk(e.data);
       } else { node = ctx.createScriptProcessor(2048, 1, 1); node.onaudioprocess = (e) => onChunk(new Float32Array(e.inputBuffer.getChannelData(0))); }
@@ -1088,7 +1130,7 @@ const col = (() => {
         $('colLevelBar').style.width = Math.min(100, Math.round(Math.sqrt(peak) * 140)) + '%';
         if (phase === 'rec') { chunks.push(buf); got += buf.length; if (got >= SECONDS * ctx.sampleRate) { got = SECONDS * ctx.sampleRate; finish(); } } };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119exp'); if (my !== gen) return;
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119alpha'); if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => onChunk(e.data);
       } else { node = ctx.createScriptProcessor(2048, 1, 1); node.onaudioprocess = (e) => onChunk(new Float32Array(e.inputBuffer.getChannelData(0))); }
