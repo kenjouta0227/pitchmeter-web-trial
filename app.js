@@ -239,7 +239,7 @@ const file = (() => {
     const busy = !!t;
     for (const id of ['analysisSel', 'audioSel', 'orientH', 'orientV', 'brandToggle', 'rangeAuto', 'rangeManual', 'midiLow', 'midiHigh']) $(id).disabled = busy;
     $('settings').classList.toggle('disabled', busy); $('rangeCard').classList.toggle('disabled', busy);
-    for (const id of ['reBtn', 'exVideo', 'exAlpha', 'exAudio', 'pickBtn', 'sampleBtn']) $(id).disabled = busy;
+    for (const id of ['reBtn', 'exVideo', 'exAlpha', 'exGreen', 'exAudio', 'pickBtn', 'sampleBtn']) $(id).disabled = busy;
     $('editor').classList.toggle('off', busy); // playback.editingEnabled = (operationKind == "idle")
     if (busy) deselect();
     renderMidi(); ads.update();
@@ -309,7 +309,7 @@ const file = (() => {
   function runProcess(analysis, audio, onProgress) {
     return new Promise((resolve, reject) => {
       const my = ++job; pendingReject = reject;
-      if (!worker) worker = new Worker('worker.js?v=20261119alpha2');
+      if (!worker) worker = new Worker('worker.js?v=20261119hevc');
       worker.onmessage = (e) => {
         const m = e.data; if (my !== job) return;
         if (m.type === 'progress') onProgress(m.value, m.label);
@@ -567,6 +567,42 @@ const file = (() => {
     // Safari の録画（MediaRecorder）・WebCodecs は透過を残せないため、端末の中で ProRes 4444（透過あり）の .mov を作る（alphamov.js / alpha-worker.js / ffmpeg/）。
     // iOS アプリは HEVC（透過あり）の .mov。どちらも 写真・動画編集アプリで透過素材として使える形式。失敗したら黒背景の MP4 に切り替える。
     const alphaMovSupported = () => appleWebKit() && !!window.PMAlphaMov && typeof WebAssembly === 'object' && !!window.Worker;
+    // 2026-11-19: 配信中の iOS アプリと同じ「HEVC（透過あり）の .mov」を端末の中で作る（hevc-worker.js / hevca/）。TikTok でも透過のまま使える形式。
+    // 失敗したら ProRes 4444 の .mov → それも無理なら黒背景の MP4。
+    async function hevcMovie(audioLR, tl, onProgress, setCancel) {
+      const A = window.PMAlphaMov, enc = A.hevcEncoder(); let cancelled = false;
+      setCancel(() => { cancelled = true; enc.close(); });
+      try {
+        status('透過動画の準備をしています…');
+        const size = isVideo ? overlaySize(sourceSize.w, sourceSize.h) : { w: 720, h: 1280 };
+        const seconds = Math.min(duration, MAX_SECONDS), app = appearance(), N = Math.max(1, Math.ceil(seconds * 30));
+        const headers = await enc.init(size.w, size.h, 30, 18);
+        const gc = document.createElement('canvas'); gc.width = size.w; gc.height = size.h; const gx = gc.getContext('2d', { alpha: true, willReadFrequently: true });
+        const frameBytes = size.w * size.h * 4, B = Math.max(1, Math.min(30, Math.floor(8e6 / frameBytes)));
+        const chunks = [], sizes = [], keys = []; let spare = null;
+        const add = (r) => { const d = new Uint8Array(r.data); let o = 0; r.sizes.forEach((n, k) => { const smp = A.hevcSample(d.subarray(o, o + n)); o += n; chunks.push(smp); sizes.push(smp.length); if (r.keys[k]) keys.push(sizes.length); }); };
+        status('透過動画を書き出しています…');
+        for (let i = 0; i < N; i += B) {
+          if (cancelled) throw new Error('cancel');
+          const n = Math.min(B, N - i), buf = spare && spare.byteLength === frameBytes * n ? new Uint8Array(spare) : new Uint8Array(frameBytes * n); spare = null;
+          for (let k = 0; k < n; k++) {
+            const t = (i + k) / 30;
+            G.render(gx, size.w, size.h, tl.states[Math.min(tl.states.length - 1, Math.max(0, Math.round(t * 30)))], tl.range, app);
+            buf.set(gx.getImageData(0, 0, size.w, size.h).data, k * frameBytes);
+          }
+          const r = await enc.encode(buf.buffer, i); add(r); spare = r.back || null;
+          onProgress(Math.min(0.99, (i + n) / N));
+          await new Promise((r) => setTimeout(r, 0));
+        }
+        add(await enc.flush());
+        if (sizes.length !== N) { const e = new Error('フレーム数が合いません（' + sizes.length + '/' + N + '）'); e.why = 'encode'; throw e; }
+        const samples = Math.min(audioLR[0].length, Math.round(N / 30 * 44100));
+        const pcm = new Blob([A.pcm16(audioLR[0].subarray(0, samples), audioLR[1].subarray(0, samples))]);
+        const blob = A.buildMov({ codec: 'hvc1', hvcC: A.hvcC(headers), width: size.w, height: size.h, fps: 30, chunks: [new Blob(chunks)], sizes, keys }, { rate: 44100, channels: 2, pcm });
+        onProgress(1);
+        return { blob, ext: 'mov', alpha: true, hevc: true };
+      } finally { enc.close(); setCancel(null); }
+    }
     async function alphaMovie(audioLR, tl, onProgress, setCancel) {
       const A = window.PMAlphaMov, enc = A.encoder(); let cancelled = false;
       setCancel(() => { cancelled = true; enc.close(); });
@@ -601,10 +637,14 @@ const file = (() => {
       } finally { enc.close(); setCancel(null); }
     }
     async function movie(ac, kind, audioLR, tl, onProgress) {
-      const transparent = kind === 'transparent';
+      const transparent = kind === 'transparent', green = kind === 'green'; // green: 緑背景（TikTok・CapCut のクロマキー用、MP4）
+      const KEY_GREEN = '#00FF00'; // メーターの色（水色〜紫〜オレンジ）・白文字から離れた純粋な緑
       let alphaError = null;
       if (transparent && alphaMovSupported()) {
-        try { return await alphaMovie(audioLR, tl, onProgress, (f) => { cancelFn = f; }); }
+        let hevcError = null;
+        try { return await hevcMovie(audioLR, tl, onProgress, (f) => { cancelFn = f; }); }
+        catch (e) { if (e && e.message === 'cancel') throw e; hevcError = e; console.warn('hevc alpha failed', window.PMAlphaMov.reasonText(e), e); onProgress(0); }
+        try { const r = await alphaMovie(audioLR, tl, onProgress, (f) => { cancelFn = f; }); r.hevcError = hevcError; return r; }
         catch (e) { if (e && e.message === 'cancel') throw e; alphaError = e; e.reason = window.PMAlphaMov.reasonText(e); console.warn('alpha mov failed', e.reason, e); onProgress(0); status('透過動画を作れなかったため（理由：' + e.reason + '）、黒背景の動画で書き出しています…'); }
       }
       let mimes = transparent ? mimeList(true) : [], alpha = mimes.length > 0;
@@ -616,14 +656,14 @@ const file = (() => {
       const ctx = cv.getContext('2d', { alpha: true }), gc = document.createElement('canvas'); gc.width = size.w; gc.height = size.h; const gx = gc.getContext('2d');
       const seconds = Math.min(duration, MAX_SECONDS), app = appearance();
       let v = null;
-      if (isVideo && !transparent) { v = document.createElement('video'); v.muted = true; v.playsInline = true; v.setAttribute('playsinline', ''); v.preload = 'auto'; v.src = url;
+      if (isVideo && !transparent && !green) { v = document.createElement('video'); v.muted = true; v.playsInline = true; v.setAttribute('playsinline', ''); v.preload = 'auto'; v.src = url;
         try { await new Promise((res, rej) => { v.oncanplay = res; v.onerror = () => rej(new Error('元の動画を読み込めませんでした')); v.load(); }); } catch (e) { cv.remove(); throw e; } }
       const dest = ac.createMediaStreamDestination(), buf = ac.createBuffer(2, audioLR[0].length, 44100);
       buf.copyToChannel(audioLR[0], 0); buf.copyToChannel(audioLR[1], 1);
       const src = ac.createBufferSource(); src.buffer = buf; src.connect(dest);
       const frame = (t) => {
         ctx.clearRect(0, 0, size.w, size.h);
-        if (!alpha) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, size.w, size.h); }
+        if (!alpha) { ctx.fillStyle = green ? KEY_GREEN : '#000'; ctx.fillRect(0, 0, size.w, size.h); }
         if (v && v.readyState >= 2) ctx.drawImage(v, 0, 0, size.w, size.h);
         G.render(gx, size.w, size.h, tl.states[Math.min(tl.states.length - 1, Math.max(0, Math.round(t * 30)))], tl.range, app);
         ctx.drawImage(gc, 0, 0);
@@ -659,7 +699,7 @@ const file = (() => {
       if (stopped && !(Math.max(0, ac.currentTime - t0) >= seconds - 0.2) && !chunks.length) throw new Error('cancel');
       const type = (rec.mimeType || mime).split(';')[0] || 'video/mp4', ext = /mp4/.test(type) ? 'mp4' : 'webm';
       const blob = new Blob(chunks, { type }); if (blob.size < 1024) throw new Error('書き出した動画が空でした。もう一度お試しください。画面を開いたまま（ほかのアプリに切り替えずに）お待ちください。');
-      return { blob, ext, alpha, fellBack: transparent && !alpha, alphaError };
+      return { blob, ext, alpha, green, fellBack: transparent && !alpha, alphaError };
     }
     return {
       active: () => !!cancelFn, cancel() { if (cancelFn) cancelFn(); cancelFn = null; },
@@ -684,7 +724,7 @@ const file = (() => {
           completed.unshift(output); renderPast();
           progress(null); setTask(null);
           $('shareBtn').hidden = false; $('outDesc').hidden = false;
-          $('outDesc').textContent = `${kind === 'audio' ? 'WAV音声' : '動画'} / 最大${MAX_SECONDS}秒。完成ファイルは追加消費なしで保存し直せます。` + (out.prores ? '（透過つきの動画（.mov）です。共有から「ビデオを保存」で写真に入れられます）' : out.fellBack ? (out.alphaError ? '（透過動画を作れなかったため（理由：' + out.alphaError.reason + '）、黒背景の動画（MP4）で書き出しました）' : '（このブラウザでは透過動画を作れないため、黒背景の動画（MP4）で書き出しました）') : '');
+          $('outDesc').textContent = `${kind === 'audio' ? 'WAV音声' : '動画'} / 最大${MAX_SECONDS}秒。完成ファイルは追加消費なしで保存し直せます。` + (out.hevc ? '（透過つきの動画（HEVC・.mov、iOSアプリと同じ形式）です。共有から「ビデオを保存」で写真に入れられます）' : out.green ? '（緑背景の動画（' + out.ext.toUpperCase() + '）です。CapCutの「クロマキー」で緑を消すと、メーターだけを重ねられます）' : out.prores ? '（透過つきの動画（ProRes・.mov）です。共有から「ビデオを保存」で写真に入れられます）' + (out.hevcError ? '（HEVCで作れなかった理由：' + window.PMAlphaMov.reasonText(out.hevcError) + '）' : '') : out.fellBack ? (out.alphaError ? '（透過動画を作れなかったため（理由：' + out.alphaError.reason + '）、黒背景の動画（MP4）で書き出しました）' : '（このブラウザでは透過動画を作れないため、黒背景の動画（MP4）で書き出しました）') : '');
           status(kind === 'audio' ? '書き出しが完成しました' : '書き出しが完成しました。保存・共有先を選んでください。閉じた場合も完成ファイルは履歴に残ります。');
           ads.atExportCompletion(playing());
         } catch (e) {
@@ -697,6 +737,7 @@ const file = (() => {
   })();
   $('exVideo').onclick = () => exporter.run('video');
   $('exAlpha').onclick = () => exporter.run('transparent');
+  $('exGreen').onclick = () => exporter.run('green');
   $('exAudio').onclick = () => exporter.run('audio');
   async function share(f) { // タップ（ユーザー操作）の中で呼ぶ: iPhone の Safari は共有シートの「ビデオを保存」で写真に保存できる
     if (navigator.canShare && navigator.share) {
@@ -754,14 +795,14 @@ const live = (() => {
       track.onended = () => stop('マイクが外れたので停止しました。つなぎ直してから「開始」を押してください。');
       devHandler = () => stop('マイクの接続が変わったので停止しました。もう一度「開始」を押してください。');
       if (navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', devHandler);
-      worker = new Worker('worker.js?v=20261119alpha2'); tl = new C.GaugeTimeline([], C.defaultRange(), false); tl.frames = [];
+      worker = new Worker('worker.js?v=20261119hevc'); tl = new C.GaugeTimeline([], C.defaultRange(), false); tl.frames = [];
       worker.onmessage = (e) => { const m = e.data; if (m.type === 'liveFrames' && m.gen === my && running) tl.append(m.frames.map(([hz, register]) => ({ hz, register }))); };
       worker.postMessage({ type: 'liveStart', rate: ctx.sampleRate, personal: samples.personal() });
       src = ctx.createMediaStreamSource(stream);
       const sink = ctx.createGain(); sink.gain.value = 0; sink.connect(ctx.destination);
       const send = (buf) => { if (running && my === gen) worker.postMessage({ type: 'livePush', samples: buf, gen: my }, [buf.buffer]); };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119alpha2');
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119hevc');
         if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => send(e.data);
@@ -973,7 +1014,7 @@ const rec = (() => {
         $('recLevelBar').style.width = Math.min(100, Math.round(Math.sqrt(peak) * 140)) + '%';
         if (phase === 'rec') { chunks.push(buf); got += buf.length; if (got >= limit * ctx.sampleRate) finish(); } };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119alpha2'); if (my !== gen) return;
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119hevc'); if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => onChunk(e.data);
       } else { node = ctx.createScriptProcessor(2048, 1, 1); node.onaudioprocess = (e) => onChunk(new Float32Array(e.inputBuffer.getChannelData(0))); }
@@ -1130,7 +1171,7 @@ const col = (() => {
         $('colLevelBar').style.width = Math.min(100, Math.round(Math.sqrt(peak) * 140)) + '%';
         if (phase === 'rec') { chunks.push(buf); got += buf.length; if (got >= SECONDS * ctx.sampleRate) { got = SECONDS * ctx.sampleRate; finish(); } } };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119alpha2'); if (my !== gen) return;
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261119hevc'); if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => onChunk(e.data);
       } else { node = ctx.createScriptProcessor(2048, 1, 1); node.onaudioprocess = (e) => onChunk(new Float32Array(e.inputBuffer.getChannelData(0))); }

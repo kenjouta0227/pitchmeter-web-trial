@@ -6601,3 +6601,13 @@ Corresponding source:
   npm package  https://www.npmjs.com/package/@ffmpeg/core/v/0.12.10
   FFmpeg       https://ffmpeg.org/download.html  (https://github.com/FFmpeg/FFmpeg)
 Copyright (c) the FFmpeg developers and the ffmpeg.wasm contributors.
+
+------------------------------------------------------------
+x265 4.1 (HEVC encoder) — WebAssembly build
+Files: hevca/hevca.js, hevca/hevca.wasm  (source changes and build steps: hevca/x265-4.1-wasm.patch,
+       hevca/hevca.c, hevca/BUILD.txt)
+Used only on the device, to encode transparent meter videos (HEVC with alpha, the same format as
+the iOS app). No audio, video or personal data is sent anywhere.
+License: GNU General Public License v2.0 or later (GPL-2.0-or-later). Full text: ffmpeg/COPYING.GPLv2.txt
+Corresponding source: https://bitbucket.org/multicoreware/x265_git (tag 4.1) plus the patch above.
+Copyright (c) 2013-2024 x265 project / MulticoreWare, Inc.

@@ -9,7 +9,7 @@
 <meta name="theme-color" content="#0d0e11">
 <title>ピッチメーター 試作版（ウェブ）</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="style.css?v=20261119alpha2">
+<link rel="stylesheet" href="style.css?v=20261119hevc">
 </head>
 <body>
 <svg class="sprite" width="0" height="0" aria-hidden="true">
@@ -151,6 +151,8 @@
       <div class="exports" id="exports" hidden>
         <button class="sbtn primary xl" id="exVideo"><svg class="ico"><use href="#i-share"/></svg>動画を書き出す</button>
         <button class="sbtn" id="exAlpha"><svg class="ico"><use href="#i-dashed"/></svg>透過メーターのみを書き出す</button>
+        <button class="sbtn" id="exGreen"><svg class="ico"><use href="#i-dashed"/></svg>緑背景（TikTok・CapCutのクロマキー用）</button>
+        <div class="caption">TikTokは透過の動画を黒くしてしまいます。緑背景で書き出して、CapCutの「クロマキー」で緑を消してから重ねてください。</div>
         <button class="sbtn" id="exAudio"><svg class="ico"><use href="#i-wave"/></svg>音声のみを書き出す</button>
       </div>
       <button class="sbtn" id="shareBtn" hidden><svg class="ico"><use href="#i-share"/></svg>完成したファイルを保存・共有</button>
@@ -365,10 +367,10 @@
   </div>
 </div>
 
-<script src="ads-config.js?v=20261119alpha2"></script>
-<script src="core.js?v=20261119alpha2"></script>
-<script src="gauge.js?v=20261119alpha2"></script>
-<script src="alphamov.js?v=20261119alpha2"></script>
-<script src="app.js?v=20261119alpha2"></script>
+<script src="ads-config.js?v=20261119hevc"></script>
+<script src="core.js?v=20261119hevc"></script>
+<script src="gauge.js?v=20261119hevc"></script>
+<script src="alphamov.js?v=20261119hevc"></script>
+<script src="app.js?v=20261119hevc"></script>
 </body>
 </html>
