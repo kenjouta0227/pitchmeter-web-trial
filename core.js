@@ -116,11 +116,11 @@ const RC = {
   medianFrames: 17, pFalsetto: 0.70, pMix: 0.35, stableFrames: 6, minValidFraction: 0.5,
   fallbackMinHz: 150.0, fallbackMaxHz: 1100.0, fallbackMaxAperiodicity: 0.15, fallbackMinCpp: 2.0,
   fallbackHalfWindowSeconds: 0.035, fallbackMinFrames: 5, fallbackMaxCents: 100.0,
-  // 2026-11-18 裏声の既定サンプル（ura1–3）をリセット: サンプル音声（個人校正）がないときは「裏声」を出さない（判定なし）。
-  // ミックス / 裏声ミックスの既定判定はそのまま。サンプル音声を適用中は個人の校正どおり（裏声も出る）。
-  defaultFalsetto: false,
-  // 2026-11-18 ミックスの既定サンプル（mix1–3）もリセット: サンプル音声（個人校正）がないときは「ミックス」も出さない（判定なし）。
-  defaultMix: false,
+  // 2026-11-18 裏声 / ミックスの既定サンプル（ura1–3, mix1–3）をリセット → 2026-11-19 既定の表示を次の条件で再開:
+  //  裏声: サンプル音声（個人校正）がないときは defaultFalsettoMinHz 以上の高い音だけ（それより低い裏声側の判定は「判定なし」）。
+  //  ミックス: 既定の判定を再開（mixFloorHz 以上・裏声でない高い音）。サンプル音声を適用中は個人の校正どおり。
+  defaultFalsetto: true, defaultFalsettoMinHz: 466.0,
+  defaultMix: true,
 };
 const REG = { none: 0, mix: 1, falsetto: 2, chest: 3, uraMix: 4 };
 const REG_LABEL = { 0: null, 1: 'ミックス', 2: '裏声', 3: '地声', 4: '裏声ミックス' }; // 3 (地声) is only produced with a personal calibration that includes 地声
@@ -255,7 +255,7 @@ class RegisterClassifier {
     for (let s = 0; s < mono.length - n; s += this.hop) {
       const f = this.features(mono, s, !keep);
       const p = frameValue(P, f);
-      states.push(sm.push(p, f.f0, f.breathDb)); probs.push(p); pitch.push(RegisterClassifier.fallbackCandidate(f));
+      states.push(sm.push(p, f.f0, f.breathDb, f.relaxedF0)); probs.push(p); pitch.push(RegisterClassifier.fallbackCandidate(f));
       centers.push((s + n / 2) / this.sampleRate); if (keep) feats.push(f);
       if (onProgress && (++cnt % 200 === 0)) onProgress(s / mono.length);
     }
@@ -291,8 +291,8 @@ function medianFallback(pitch, lo, hi) {
  *     裏声 with p < pHead (just above pF) and breath ≤ cleanDb (little breath) → 裏声ミックス
  *   ミックス / 裏声ミックス are not shown below mixFloorHz; a breathy relaxed frame can never yield ミックス / 裏声ミックス. */
 class Smoother {
-  constructor(personal) { this.history = []; this.bhist = []; this.candidate = REG.none; this.count = 0; this.state = REG.none; this.T = thresholdsOf(personal); this.falsettoOn = !!personal || RC.defaultFalsetto; this.mixOn = !!personal || RC.defaultMix; }
-  push(p, f0, breath) {
+  constructor(personal) { this.history = []; this.bhist = []; this.candidate = REG.none; this.count = 0; this.state = REG.none; this.T = thresholdsOf(personal); this.personal = !!personal; this.falsettoOn = !!personal || RC.defaultFalsetto; this.mixOn = !!personal || RC.defaultMix; }
+  push(p, f0, breath, relaxedF0) {
     const T = this.T, med = (a) => a.length % 2 ? a[a.length >> 1] : (a[a.length / 2 - 1] + a[a.length / 2]) / 2;
     this.history.push(p); this.bhist.push(p === null || p === CAL.CHEST ? NaN : breath);
     if (this.history.length > RC.medianFrames) { this.history.shift(); this.bhist.shift(); }
@@ -317,6 +317,7 @@ class Smoother {
       }
     }
     if (c === REG.falsetto && !this.falsettoOn) c = REG.none; // 既定の裏声サンプルなし（2026-11-18）
+    if (c === REG.falsetto && !this.personal && !((f0 > 0 ? f0 : (p === CAL.BREATHY ? relaxedF0 : 0)) >= RC.defaultFalsettoMinHz)) c = REG.none; // 既定の裏声は高い音だけ（2026-11-19。息漏れフレームは緩いピッチで判定）
     if (c === REG.mix && !this.mixOn) c = REG.none; // 既定のミックスサンプルなし（2026-11-18）
     if (c === this.candidate) this.count++; else { this.candidate = c; this.count = 1; }
     if (this.count >= RC.stableFrames) this.state = c;
@@ -578,7 +579,7 @@ class LivePitchStream {
     const n = this.cl.frameLength;
     while (this.nextStart + n < this.total44) {
       const f = this.cl.features(this.pcm44, this.nextStart - this.base44, true);
-      this.states.push(this.sm.push(frameValue(this.P, f), f.f0, f.breathDb));
+      this.states.push(this.sm.push(frameValue(this.P, f), f.f0, f.breathDb, f.relaxedF0));
       this.cands.push(RegisterClassifier.fallbackCandidate(f));
       this.nextStart += this.cl.hop;
     }
