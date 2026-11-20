@@ -116,6 +116,12 @@ const RC = {
   pitchCont: { ratios: [2, 3, 1.5, 0.5, 1 / 3, 2 / 3, 4, 0.25], tolCents: 60, minJumpCents: 300, cfTolCents: 70, holdFrames: 7, holdFramesConfirmed: 6, gapFrames: 15, fifths: [1.5, 2 / 3] },
   // 2026-11-21 判定の表示が一瞬だけ切り替わらないように: 表示中の判定から別の判定へ移るのは switchFrames 続いた時だけ（判定なしから出る時は今までどおり stableFrames）。
   switchFrames: 13, maxHarmonicHz: 5000.0,
+  // 2026-11-21 音で聞き分けるAI（EfficientAT mn10、端末の中だけで動く）の 裏声らしさ q（0〜1、前後 halfWin 秒の中央値）。
+  //  ① q が uraP 以上（声が出ている所）→ 裏声で固定（ミックスに置き換えない）。一度 裏声 になったら q が uraP−offHyst を下回るまで 裏声。
+  //  ② q が vetoP 以下＝はっきり地声 で、同じ音の中に今までの基準でも地声らしいフレームがある（noteChest）（または q が vetoHard 以下＝とてもはっきり地声）→ 今までの判定が 裏声 でも 地声。ミックス系（ミックス・裏声orミックス）は今までの基準のまま。
+  //  ③ その間 → 今までの判定のまま（ほかの歌手の裏声を弱くしないため）。AIが読み込めない時も今までの判定のまま。
+  soundModel: { uraP: 0.9, vetoP: 0.02, vetoHard: 0.003, offHyst: 0.1, halfWin: 0.2, liveBack: 0.45 },
+  noteChest: { semis: 1.5, gapFrames: 13, frac: 0.15, minChest: 3 }, // 2026-11-21 同じ音の中に 地声らしいフレームが frac 以上（minChest 以上）
   cppFmax: 8000.0, cppBins: 512, cppFloorDb: 80.0, breathLoHz: 1000.0,
   // 2026-11-17 裏声ミックス / 息漏れ: see Smoother.push
   pHead: 0.85, breathyDb: -30.0, cleanDb: -38.0, relaxedYinThreshold: 0.35, relaxedBreathMin: -30.0, relaxedBreathMax: -6.0,
@@ -289,18 +295,18 @@ class RegisterClassifier {
   }
   analyze(mono, opts) {
     opts = opts || {}; const keep = !!opts.keepFeatures, onProgress = opts.onProgress;
-    const n = this.frameLength, centers = [], states = [], feats = [], pitch = [], probs = [], octs = [], f0s = [];
+    const n = this.frameLength, centers = [], states = [], feats = [], pitch = [], probs = [], octs = [], f0s = [], nch = [];
     const P = opts.personal || null, sm = new Smoother(P);
-    if (mono.length <= n) return { frameCenters: centers, states, features: feats, pitch, probs, octs, f0s };
+    if (mono.length <= n) return { frameCenters: centers, states, features: feats, pitch, probs, octs, f0s, nch };
     let cnt = 0;
     for (let s = 0; s < mono.length - n; s += this.hop) {
       const f = this.features(mono, s, !keep);
       const p = frameValue(P, f);
-      states.push(sm.push(p, f.f0, f.breathDb, f.relaxedF0)); probs.push(p); pitch.push(RegisterClassifier.fallbackCandidate(f)); octs.push(f.octHalved ? f.f0 : 0); f0s.push(f.f0 > 0 && f.aperiodicity < RC.gateMaxAperiodicity ? f.f0 : 0);
+      states.push(sm.push(p, f.f0, f.breathDb, f.relaxedF0)); nch.push(!!sm.noteChest); probs.push(p); pitch.push(RegisterClassifier.fallbackCandidate(f)); octs.push(f.octHalved ? f.f0 : 0); f0s.push(f.f0 > 0 && f.aperiodicity < RC.gateMaxAperiodicity ? f.f0 : 0);
       centers.push((s + n / 2) / this.sampleRate); if (keep) feats.push(f);
       if (onProgress && (++cnt % 200 === 0)) onProgress(s / mono.length);
     }
-    return { frameCenters: centers, states, features: feats, pitch, probs, octs, f0s };
+    return { frameCenters: centers, states, features: feats, pitch, probs, octs, f0s, nch };
   }
   static fallbackPitch(track, seconds) {
     if (!track.pitch.length) return null;
@@ -319,6 +325,26 @@ class RegisterClassifier {
 /** 2026-11-21 高さの表示（16 kHz の pitchDetect）を、判定側が1オクターブ下に直した高さに合わせる。けんじょうさんの動画 36〜38秒:
  *  表示 676.9 Hz・hiE → 本当は約338 Hz（mid2E）の地声。窓（±fallbackHalfWindowSeconds）の判定フレームの過半数が「1オクターブ下に直した」で、
  *  その中央値が 表示の高さの半分から octFixMaxCents 以内の時だけ、表示を半分にする。それ以外（本物の高い音）はそのまま。 */
+/** 2026-11-21 音で聞き分けるAIの結果（track: { hop, t0, p: 窓の中心ごとの 裏声らしさ }）。t の前後 halfWin 秒の中央値。無ければ NaN。 */
+function soundQ(track, t) {
+  if (!track || !track.p || !track.p.length || !RC.soundModel) return NaN;
+  const h = RC.soundModel.halfWin, a = Math.max(0, Math.ceil((t - h - track.t0) / track.hop - 1e-9)), b = Math.min(track.p.length - 1, Math.floor((t + h - track.t0) / track.hop + 1e-9));
+  const v = []; for (let i = a; i <= b; i++) if (isFinite(track.p[i])) v.push(track.p[i]);
+  soundQ.stale = false;
+  if (!v.length && track.live) { soundQ.stale = true; // リアルタイム: その時刻の窓がまだ無い時は 直近 liveBack 秒以内の窓（最大2つ）
+    for (let i = Math.min(b, track.p.length - 1); i >= 0 && v.length < 2 && track.t0 + i * track.hop >= t - RC.soundModel.liveBack; i--) if (isFinite(track.p[i])) { v.push(track.p[i]); soundQ.staleFrom = track.t0 + i * track.hop; } }
+  if (!v.length) return NaN; v.sort((x, y) => x - y);
+  return v.length % 2 ? v[v.length >> 1] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2;
+}
+/** 2026-11-21 2段階: AIで 地声か裏声か → 裏声はそのまま固定、地声側だけ今までの基準（ミックス・裏声orミックス）。st = { ura } を前の状態として持ち回る。 */
+function soundRegister(state, q, voiced, st, noteChest, stale) {
+  const SM = RC.soundModel;
+  if (!SM || !isFinite(q)) { st.ura = false; return state; }
+  st.ura = voiced && (q >= SM.uraP || (st.ura && q >= SM.uraP - SM.offHyst));
+  if (st.ura) return REG.falsetto;
+  if (state === REG.falsetto && q <= SM.vetoP && (noteChest || (!stale && q <= SM.vetoHard))) return REG.chest; // 少し前の窓（stale）だけの時は 同じ音の地声らしさも要る
+  return state;
+}
 function octaveFixedHz(hz, octs, lo, hi) {
   if (!(hz > 0) || !octs || lo > hi) return 0;
   const v = []; for (let i = lo; i <= hi; i++) if (octs[i] > 0) v.push(octs[i]);
@@ -386,6 +412,12 @@ class Smoother {
     const spot = p === CAL.SPOT; if (spot) p = CAL.CHEST; // 2026-11-21 spotRef と同じ音色（地声の票として数える）
     this.shist = this.shist || []; this.shist.push(spot); if (this.shist.length > RC.medianFrames) this.shist.shift();
     const T = this.T, med = (a) => a.length % 2 ? a[a.length >> 1] : (a[a.length / 2 - 1] + a[a.length / 2]) / 2;
+    { const NC = RC.noteChest; // 2026-11-21 同じ音（高さがほぼ同じで途切れていない間）の中の 地声らしいフレーム（今までの基準）を数える。AIの「地声」と両方そろった時だけ 裏声を取り消す
+      if (NC) { if (p === null || !(f0 > 0)) { this.nGap = (this.nGap || 0) + 1; if (this.nGap > NC.gapFrames) { this.nF = 0; this.nN = 0; this.nC = 0; } }
+        else { this.nGap = 0; const st = 12 * log2(f0 / 440);
+          if (!this.nN || Math.abs(st - this.nF) > NC.semis) { this.nF = st; this.nN = 0; this.nC = 0; } else this.nF += 0.1 * (st - this.nF);
+          this.nN++; if (p === CAL.CHEST) this.nC++; }
+        this.noteChest = this.nN > 0 && this.nC >= NC.minChest && this.nC >= NC.frac * this.nN; this.noteFrames = this.nN || 0; } }
     this.history.push(p); this.bhist.push(p === null || p === CAL.CHEST ? NaN : breath);
     if (this.history.length > RC.medianFrames) { this.history.shift(); this.bhist.shift(); }
     const vals = this.history.filter(v => v !== null);
@@ -660,12 +692,12 @@ function analyzePitch16k(pcm16, onProgress) {
   }
   return frames;
 }
-function attachRegister(frames, mono44100, onProgress, personal) {
+function attachRegister(frames, mono44100, onProgress, personal, sound) {
   if (!frames.length) return frames;
   const P = personal || null, cl = new RegisterClassifier(44100, classifierOpts(P));
   const track = cl.analyze(mono44100, { onProgress, personal: P });
   if (!track.frameCenters.length) return frames;
-  const first = track.frameCenters[0], hopS = cl.hop / cl.sampleRate, pc = new PitchContinuity();
+  const first = track.frameCenters[0], hopS = cl.hop / cl.sampleRate, pc = new PitchContinuity(), sst = {};
   return frames.map(f => {
     const g = Object.assign({}, f);
     const c = track.frameCenters, lo = Math.max(0, Math.ceil((f.seconds - RC.fallbackHalfWindowSeconds - first) / hopS - 1e-9)), hi = Math.min(c.length - 1, Math.floor((f.seconds + RC.fallbackHalfWindowSeconds - first) / hopS + 1e-9));
@@ -673,11 +705,12 @@ function attachRegister(frames, mono44100, onProgress, personal) {
     else { const h2 = octaveFixedHz(f.hz, track.octs, lo, hi); if (h2 > 0) { g.hz = h2; g.octaveFixed = true; } }
     { const h3 = pc.push(g.hz, cfMedian(track.f0s, lo, hi), !!g.octaveFixed); if (h3 !== g.hz) { g.hz = h3; g.continuityFixed = true; } }
     g.register = RegisterClassifier.stateAt(track, f.seconds, hopS, first);
+    if (sound) g.register = soundRegister(g.register, soundQ(sound, f.seconds), g.hz > 0, sst, f.seconds >= first && track.nch[Math.min(track.nch.length - 1, Math.floor((f.seconds - first) / hopS + 1e-9))]);
     return g;
   });
 }
 /** Full offline pipeline: mono at any rate -> 20 ms frames with hz (+fallback) and register. */
-function analyzeMono(mono, rate, onProgress, personal) {
+function analyzeMono(mono, rate, onProgress, personal, sound) {
   const prog = (a, b) => (u) => onProgress && onProgress(a + (b - a) * u);
   prog(0, 0.05)(0);
   const m44 = rate === 44100 ? mono : resampleAll(mono, rate, 44100);
@@ -685,7 +718,7 @@ function analyzeMono(mono, rate, onProgress, personal) {
   const m16 = resampleAll(m44, 44100, 16000);
   prog(0.08, 0.12)(1);
   const frames = analyzePitch16k(m16, prog(0.12, 0.45));
-  const out = attachRegister(frames, m44, prog(0.45, 0.99), personal);
+  const out = attachRegister(frames, m44, prog(0.45, 0.99), personal, sound);
   onProgress && onProgress(1);
   return out;
 }
@@ -699,8 +732,10 @@ class LivePitchStream {
     this.cl = this.cl || new RegisterClassifier(44100, classifierOpts(this.P));
     this.pcm16 = new Float32Array(0); this.base16 = 0; this.nextCenter = 0;
     this.pcm44 = new Float64Array(0); this.base44 = 0; this.nextStart = 0; this.total44 = 0;
-    this.sm = new Smoother(this.P); this.states = []; this.cands = []; this.octs = []; this.f0s = []; this.pc = new PitchContinuity(); this.pending = []; this.emitted = 0;
+    this.sm = new Smoother(this.P); this.states = []; this.nch = []; this.nage = []; this.cands = []; this.octs = []; this.f0s = []; this.pc = new PitchContinuity(); this.pending = []; this.emitted = 0; this.sound = null; this.sst = {};
   }
+  /** 2026-11-21 音で聞き分けるAIの結果を足す（窓の中心 center 秒、裏声らしさ p）。worker が順番に入れる。 */
+  addSound(center, p, hop) { if (!this.sound) this.sound = { t0: center, hop: hop || 0.1, p: [], live: true }; const i = Math.round((center - this.sound.t0) / this.sound.hop); while (this.sound.p.length < i) this.sound.p.push(NaN); if (i >= 0) this.sound.p[i] = p; }
   get lagSeconds() { return this.total44 / 44100 - Math.max(0, this.emitted - 1) * 320 / 16000; }
   push(samples) {
     if (!samples.length) return [];
@@ -717,7 +752,7 @@ class LivePitchStream {
     const n = this.cl.frameLength;
     while (this.nextStart + n < this.total44) {
       const f = this.cl.features(this.pcm44, this.nextStart - this.base44, true);
-      this.states.push(this.sm.push(frameValue(this.P, f), f.f0, f.breathDb, f.relaxedF0));
+      this.states.push(this.sm.push(frameValue(this.P, f), f.f0, f.breathDb, f.relaxedF0)); this.nch.push(!!this.sm.noteChest); this.nage.push(this.sm.noteFrames || 0);
       this.cands.push(RegisterClassifier.fallbackCandidate(f)); this.octs.push(f.octHalved ? f.f0 : 0); this.f0s.push(f.f0 > 0 && f.aperiodicity < RC.gateMaxAperiodicity ? f.f0 : 0);
       this.nextStart += this.cl.hop;
     }
@@ -767,6 +802,10 @@ class LivePitchStream {
       const h3 = this.pc.push(g.hz, cfMedian(this.f0s, lo, hi), !!g.octaveFixed); if (h3 !== g.hz) { g.hz = h3; g.continuityFixed = true; }
     }
     if (f.seconds >= this.firstCenter) g.register = this.states[Math.min(this.states.length - 1, Math.floor((f.seconds - this.firstCenter) / this.stateHop + 1e-9))];
+    if (this.sound) { // 少し前の窓（stale）は、同じ音がその窓の時刻から続いている時だけ使う（前の音の地声で 次の音の裏声を消さない）
+      const q = soundQ(this.sound, f.seconds), si = f.seconds >= this.firstCenter ? Math.min(this.nch.length - 1, Math.floor((f.seconds - this.firstCenter) / this.stateHop + 1e-9)) : -1;
+      const sameNote = si >= 0 && this.nage[si] * this.stateHop >= f.seconds - (soundQ.staleFrom - 0.25);
+      g.register = soundRegister(g.register, q, g.hz > 0, this.sst, si >= 0 && this.nch[si], soundQ.stale && !sameNote); }
     return g;
   }
 }
@@ -947,6 +986,6 @@ const MovAudio = (() => {
 })();
 
 const api = { displayRegister, pointerPosition, MovAudio, roundHalfEven, pitchDetect, pitchNote, noteLabel, Resampler, resampleAll, fft, RC, REG, REG_LABEL, RegisterClassifier, Smoother,
-  analyzePitch16k, attachRegister, CAL, GUIDE, guideNotes, doremi, midiHz, calibrationFrames, buildCalibration, personalValue, frameValue, thresholdsOf, analyzeMono, LivePitchStream, makeRange, defaultRange, BandRule, GaugeTimeline, buildStates };
+  analyzePitch16k, attachRegister, soundQ, soundRegister, CAL, GUIDE, guideNotes, doremi, midiHz, calibrationFrames, buildCalibration, personalValue, frameValue, thresholdsOf, analyzeMono, LivePitchStream, makeRange, defaultRange, BandRule, GaugeTimeline, buildStates };
 if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PMCore = api;
 })(typeof self !== 'undefined' ? self : this);
