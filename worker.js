@@ -1,6 +1,6 @@
 /* Analysis worker: runs entirely on this device. Nothing is uploaded.
    process() = iOS LocalAudioPipeline.process (原音 / 歌声 / 歌声＋保守的補完, 出力音声 原音 / 歌声のみ / 伴奏のみ). */
-importScripts('core.js?v=20261120lbl', 'sep.js?v=20261120lbl');
+importScripts('core.js?v=20261120raw', 'sep.js?v=20261120raw');
 let live = null, sessions = null, ortReady = null, cancelled = false;
 function loadOrt() {
   if (ortReady) return ortReady;

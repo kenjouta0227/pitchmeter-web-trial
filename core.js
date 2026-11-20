@@ -132,7 +132,8 @@ const REG = { none: 0, mix: 1, falsetto: 2, chest: 3, uraMix: 4 };
 const REG_LABEL = { 0: null, 1: 'ミックス', 2: '裏声', 3: '地声', 4: '裏声ミックス' };
 // 2026-11-19（けんじょうさん指示「割合が裏声が多い時は全部ミックスってポインターに出して」）:
 // 裏声寄りの判定（裏声・裏声ミックス）は、表示ではすべて「ミックス」にする。判定そのもの（frames の register）は変えない。
-function displayRegister(r) { return r === 2 || r === 4 ? 1 : r; } // 3 (地声) is only produced with a personal calibration that includes 地声
+// 2026-11-20 けんじょうさん指示で元に戻した: 裏声は裏声、裏声ミックスは裏声ミックスのまま表示する。
+function displayRegister(r) { return r; } // 3 (地声) is only produced with a personal calibration that includes 地声
 
 class RegisterClassifier {
   constructor(sampleRate, opts) {
