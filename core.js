@@ -121,6 +121,13 @@ const RC = {
   //  ② q が vetoP 以下＝はっきり地声 で、同じ音の中に今までの基準でも地声らしいフレームがある（noteChest）（または q が vetoHard 以下＝とてもはっきり地声）→ 今までの判定が 裏声 でも 地声。ミックス系（ミックス・裏声orミックス）は今までの基準のまま。
   //  ③ その間 → 今までの判定のまま（ほかの歌手の裏声を弱くしないため）。AIが読み込めない時も今までの判定のまま。
   soundModel: { uraP: 0.9, vetoP: 0.02, vetoHard: 0.003, offHyst: 0.1, halfWin: 0.2, liveBack: 0.45 },
+  // 2026-11-21 けんじょうさん指示（通話）: 裏声を2つに分ける。息が多くて薄い完全なファルセット → 裏声（2）、芯があって密度の高いヘッドボイス（裏声寄りのミックス）→ 裏声ミックス（4）。
+  //  裏声と決まった所（AIの裏声・今までの判定の裏声）で、前後 halfWin 秒のうち 声が出ているフレームの frac 以上が「芯がある」（倍音が豊か hrich 以上・2倍音が強い h1h2 以下・
+  //  響きがはっきり cpp 以上・息のノイズが少ない breath 以下）か、AIの裏声らしさ q が headQ 未満（AIは完全なファルセットと聞いていない）なら 裏声ミックス。
+  headSplit: { headQ: 0.5, hrich: 8, h1h2: -3, cpp: 3.4, breath: -35, halfWin: 0.25, frac: 0.5 },
+  // 2026-11-21 けんじょうさん指示: メーターの針が真ん中（ミックス）より右で「裏声」と出る所は 全部「裏声ミックス」と表示（リアルタイム・再生・書き出し 共通、GaugeTimeline）。
+  //  minPos: 針の位置（0〜1、0.5 が真ん中）。mode 'all' = 全部 / 'keepSure' = AIがはっきり裏声（q ≥ soundModel.uraP）で芯のない所は 裏声 のまま。
+  uraRight: { on: true, minPos: 0.5, mode: 'keepSure' }, // 2026-11-21 けんじょうさん回答: 完全なファルセットだけ右側でも「裏声」
   noteChest: { semis: 1.5, gapFrames: 13, frac: 0.15, minChest: 3 }, // 2026-11-21 同じ音の中に 地声らしいフレームが frac 以上（minChest 以上）
   cppFmax: 8000.0, cppBins: 512, cppFloorDb: 80.0, breathLoHz: 1000.0,
   // 2026-11-17 裏声ミックス / 息漏れ: see Smoother.push
@@ -155,7 +162,7 @@ const RC = {
   labelRef: { bias: 3.460066776914001, weightHrich: -0.1391899095963697, weightCpp: -0.6025507640698841, weightH1H2: 0, pFalsetto: 0.50, pMix: 0.45, pHead: 0.50, mixFloorHz: 0 }, // 2026-11-20 裏声を最優先（けんじょうさん）: pFalsetto・pHead 0.60→0.50（0.45 以下は 地声テイク chest_010 が崩れる） // 2026-11-20 ミックスの下限（430 Hz 以上だけミックス＝「そう」の決まり）は削除
 };
 const REG = { none: 0, mix: 1, falsetto: 2, chest: 3, uraMix: 4, uraOrMix: 5 };
-const REG_LABEL = { 0: null, 1: 'ミックス', 2: '裏声', 3: '地声', 4: '裏声orミックス', 5: '裏声orミックス' }; // 2026-11-20 けんじょうさん指示: 裏声ミックス(4)も表示は「裏声orミックス」。判定(コード4/5)はそのまま
+const REG_LABEL = { 0: null, 1: 'ミックス', 2: '裏声', 3: '地声', 4: '裏声ミックス', 5: '裏声orミックス' }; // 2026-11-21 けんじょうさん指示（通話）: 4 はヘッドボイス用に「裏声ミックス」。5（ミックス側の境目）は「裏声orミックス」のまま。 // 2026-11-20 けんじょうさん指示: 裏声ミックス(4)も表示は「裏声orミックス」。判定(コード4/5)はそのまま
 // 2026-11-19（けんじょうさん指示「割合が裏声が多い時は全部ミックスってポインターに出して」）:
 // 裏声寄りの判定（裏声・裏声ミックス）は、表示ではすべて「ミックス」にする。判定そのもの（frames の register）は変えない。
 // 2026-11-20 けんじょうさん指示で元に戻した: 裏声は裏声、裏声ミックスは裏声ミックスのまま表示する。
@@ -295,18 +302,18 @@ class RegisterClassifier {
   }
   analyze(mono, opts) {
     opts = opts || {}; const keep = !!opts.keepFeatures, onProgress = opts.onProgress;
-    const n = this.frameLength, centers = [], states = [], feats = [], pitch = [], probs = [], octs = [], f0s = [], nch = [];
+    const n = this.frameLength, centers = [], states = [], feats = [], pitch = [], probs = [], octs = [], f0s = [], nch = [], dense = [];
     const P = opts.personal || null, sm = new Smoother(P);
-    if (mono.length <= n) return { frameCenters: centers, states, features: feats, pitch, probs, octs, f0s, nch };
+    if (mono.length <= n) return { frameCenters: centers, states, features: feats, pitch, probs, octs, f0s, nch, dense };
     let cnt = 0;
     for (let s = 0; s < mono.length - n; s += this.hop) {
       const f = this.features(mono, s, !keep);
       const p = frameValue(P, f);
-      states.push(sm.push(p, f.f0, f.breathDb, f.relaxedF0)); nch.push(!!sm.noteChest); probs.push(p); pitch.push(RegisterClassifier.fallbackCandidate(f)); octs.push(f.octHalved ? f.f0 : 0); f0s.push(f.f0 > 0 && f.aperiodicity < RC.gateMaxAperiodicity ? f.f0 : 0);
+      states.push(sm.push(p, f.f0, f.breathDb, f.relaxedF0)); nch.push(!!sm.noteChest); probs.push(p); pitch.push(RegisterClassifier.fallbackCandidate(f)); octs.push(f.octHalved ? f.f0 : 0); f0s.push(f.f0 > 0 && f.aperiodicity < RC.gateMaxAperiodicity ? f.f0 : 0); dense.push(headDense(f));
       centers.push((s + n / 2) / this.sampleRate); if (keep) feats.push(f);
       if (onProgress && (++cnt % 200 === 0)) onProgress(s / mono.length);
     }
-    return { frameCenters: centers, states, features: feats, pitch, probs, octs, f0s, nch };
+    return { frameCenters: centers, states, features: feats, pitch, probs, octs, f0s, nch, dense };
   }
   static fallbackPitch(track, seconds) {
     if (!track.pitch.length) return null;
@@ -325,6 +332,23 @@ class RegisterClassifier {
 /** 2026-11-21 高さの表示（16 kHz の pitchDetect）を、判定側が1オクターブ下に直した高さに合わせる。けんじょうさんの動画 36〜38秒:
  *  表示 676.9 Hz・hiE → 本当は約338 Hz（mid2E）の地声。窓（±fallbackHalfWindowSeconds）の判定フレームの過半数が「1オクターブ下に直した」で、
  *  その中央値が 表示の高さの半分から octFixMaxCents 以内の時だけ、表示を半分にする。それ以外（本物の高い音）はそのまま。 */
+/** 2026-11-21 ヘッドボイス（芯があって密度の高い裏声寄りの声）らしいフレームか: 1 = 芯がある, 0 = 声はあるが芯がない, -1 = 声なし。RC.headSplit */
+function headDense(f) {
+  const H = RC.headSplit; if (!H || !(f.f0 > 0) || !RegisterClassifier.hasHarmonics(f)) return -1;
+  return f.hrichDb >= H.hrich && isFinite(f.h1h2) && f.h1h2 <= H.h1h2 && f.cpp8k >= H.cpp && !(isFinite(f.breathDb) && f.breathDb > H.breath) ? 1 : 0;
+}
+/** 2026-11-21 裏声（2）を 完全なファルセット（2）とヘッドボイス＝裏声ミックス（4）に分ける。dense[lo..hi] は headDense、q は AIの裏声らしさ（無ければ NaN）。 */
+function headSplitRegister(reg, dense, lo, hi, q) {
+  const H = RC.headSplit; if (!H || reg !== REG.falsetto) return reg;
+  if (isFinite(q) && q < H.headQ) return REG.uraMix;
+  let n = 0, d = 0; for (let i = Math.max(0, lo); i <= Math.min(dense.length - 1, hi); i++) if (dense[i] >= 0) { n++; if (dense[i] > 0) d++; }
+  return n > 0 && d >= H.frac * n ? REG.uraMix : reg;
+}
+/** 2026-11-21 表示: 針が真ん中より右の「裏声」は「裏声ミックス」（RC.uraRight）。sure = AIがはっきり裏声で芯のない所（mode 'keepSure' の時だけ使う）。 */
+function uraRightRegister(reg, position, sure) {
+  const U = RC.uraRight; if (!U || !U.on || reg !== REG.falsetto || !(position >= U.minPos)) return reg;
+  return U.mode === 'keepSure' && sure ? reg : REG.uraMix;
+}
 /** 2026-11-21 音で聞き分けるAIの結果（track: { hop, t0, p: 窓の中心ごとの 裏声らしさ }）。t の前後 halfWin 秒の中央値。無ければ NaN。 */
 function soundQ(track, t) {
   if (!track || !track.p || !track.p.length || !RC.soundModel) return NaN;
@@ -705,7 +729,10 @@ function attachRegister(frames, mono44100, onProgress, personal, sound) {
     else { const h2 = octaveFixedHz(f.hz, track.octs, lo, hi); if (h2 > 0) { g.hz = h2; g.octaveFixed = true; } }
     { const h3 = pc.push(g.hz, cfMedian(track.f0s, lo, hi), !!g.octaveFixed); if (h3 !== g.hz) { g.hz = h3; g.continuityFixed = true; } }
     g.register = RegisterClassifier.stateAt(track, f.seconds, hopS, first);
-    if (sound) g.register = soundRegister(g.register, soundQ(sound, f.seconds), g.hz > 0, sst, f.seconds >= first && track.nch[Math.min(track.nch.length - 1, Math.floor((f.seconds - first) / hopS + 1e-9))]);
+    const q = sound ? soundQ(sound, f.seconds) : NaN;
+    if (sound) g.register = soundRegister(g.register, q, g.hz > 0, sst, f.seconds >= first && track.nch[Math.min(track.nch.length - 1, Math.floor((f.seconds - first) / hopS + 1e-9))]);
+    if (g.register === REG.falsetto && RC.headSplit) { const hw = RC.headSplit.halfWin, a = Math.ceil((f.seconds - hw - first) / hopS - 1e-9), b = Math.floor((f.seconds + RC.fallbackHalfWindowSeconds - first) / hopS + 1e-9); // リアルタイムと同じ: 前 halfWin 秒〜少し先
+      g.register = headSplitRegister(g.register, track.dense, a, b, q); if (g.register === REG.falsetto) g.uraSure = isFinite(q) && RC.soundModel && q >= RC.soundModel.uraP; }
     return g;
   });
 }
@@ -732,7 +759,7 @@ class LivePitchStream {
     this.cl = this.cl || new RegisterClassifier(44100, classifierOpts(this.P));
     this.pcm16 = new Float32Array(0); this.base16 = 0; this.nextCenter = 0;
     this.pcm44 = new Float64Array(0); this.base44 = 0; this.nextStart = 0; this.total44 = 0;
-    this.sm = new Smoother(this.P); this.states = []; this.nch = []; this.nage = []; this.cands = []; this.octs = []; this.f0s = []; this.pc = new PitchContinuity(); this.pending = []; this.emitted = 0; this.sound = null; this.sst = {};
+    this.sm = new Smoother(this.P); this.states = []; this.nch = []; this.nage = []; this.dense = []; this.cands = []; this.octs = []; this.f0s = []; this.pc = new PitchContinuity(); this.pending = []; this.emitted = 0; this.sound = null; this.sst = {};
   }
   /** 2026-11-21 音で聞き分けるAIの結果を足す（窓の中心 center 秒、裏声らしさ p）。worker が順番に入れる。 */
   addSound(center, p, hop) { if (!this.sound) this.sound = { t0: center, hop: hop || 0.1, p: [], live: true }; const i = Math.round((center - this.sound.t0) / this.sound.hop); while (this.sound.p.length < i) this.sound.p.push(NaN); if (i >= 0) this.sound.p[i] = p; }
@@ -752,7 +779,7 @@ class LivePitchStream {
     const n = this.cl.frameLength;
     while (this.nextStart + n < this.total44) {
       const f = this.cl.features(this.pcm44, this.nextStart - this.base44, true);
-      this.states.push(this.sm.push(frameValue(this.P, f), f.f0, f.breathDb, f.relaxedF0)); this.nch.push(!!this.sm.noteChest); this.nage.push(this.sm.noteFrames || 0);
+      this.states.push(this.sm.push(frameValue(this.P, f), f.f0, f.breathDb, f.relaxedF0)); this.nch.push(!!this.sm.noteChest); this.nage.push(this.sm.noteFrames || 0); this.dense.push(headDense(f));
       this.cands.push(RegisterClassifier.fallbackCandidate(f)); this.octs.push(f.octHalved ? f.f0 : 0); this.f0s.push(f.f0 > 0 && f.aperiodicity < RC.gateMaxAperiodicity ? f.f0 : 0);
       this.nextStart += this.cl.hop;
     }
@@ -805,7 +832,11 @@ class LivePitchStream {
     if (this.sound) { // 少し前の窓（stale）は、同じ音がその窓の時刻から続いている時だけ使う（前の音の地声で 次の音の裏声を消さない）
       const q = soundQ(this.sound, f.seconds), si = f.seconds >= this.firstCenter ? Math.min(this.nch.length - 1, Math.floor((f.seconds - this.firstCenter) / this.stateHop + 1e-9)) : -1;
       const sameNote = si >= 0 && this.nage[si] * this.stateHop >= f.seconds - (soundQ.staleFrom - 0.25);
-      g.register = soundRegister(g.register, q, g.hz > 0, this.sst, si >= 0 && this.nch[si], soundQ.stale && !sameNote); }
+      g.register = soundRegister(g.register, q, g.hz > 0, this.sst, si >= 0 && this.nch[si], soundQ.stale && !sameNote); g.q = q; }
+    if (g.register === REG.falsetto && RC.headSplit && f.seconds >= this.firstCenter) { // リアルタイム: 前 halfWin 秒〜少し先（ファイル解析と同じ窓）
+      const q = this.sound ? g.q : NaN, a = Math.ceil((f.seconds - RC.headSplit.halfWin - this.firstCenter) / this.stateHop - 1e-9), b = Math.min(this.states.length - 1, Math.floor((f.seconds + RC.fallbackHalfWindowSeconds - this.firstCenter) / this.stateHop + 1e-9));
+      g.register = headSplitRegister(g.register, this.dense, a, b, q); if (g.register === REG.falsetto) g.uraSure = isFinite(q) && q >= RC.soundModel.uraP; }
+    delete g.q;
     return g;
   }
 }
@@ -876,16 +907,17 @@ class GaugeTimeline {
         this.lastPitch = ft; }
     } this.index = end; }
     const hz = end >= 0 ? fr[end].hz : 0;
-    if (hz > 0) { this.lastVoiced = t; this.readoutHz = hz; this.readoutTime = t; this.readoutRegister = displayRegister(fr[end].register); }
+    if (hz > 0) { this.lastVoiced = t; this.readoutHz = hz; this.readoutTime = t; this.readoutRegister = displayRegister(fr[end].register); this.readoutSure = !!fr[end].uraSure; }
     const target = hz > 0 ? 1 : Math.max(0, 1 - Math.max(0, t - this.lastVoiced - 0.14) / 0.35);
     this.opacity += (target - this.opacity) * (1 - Math.exp(-(1 / 30) / 0.10));
     const fade = Math.min(1, Math.max(0, (t - this.readoutTime) / 0.8));
     const range = this.range;
     const midi = this.valid ? this.value(t) : (range.low + range.high) / 2, readoutAlpha = this.readoutHz > 0 ? 1 - fade * fade * (3 - 2 * fade) : 0;
-    const band = BandRule.targets(this.readoutRegister, readoutAlpha > 0.01, BandRule.position(midi, range), this.vertical);
+    const shown = uraRightRegister(this.readoutRegister, BandRule.position(midi, range), this.readoutSure); // 2026-11-21 針が真ん中より右の 裏声 → 裏声ミックス
+    const band = BandRule.targets(shown, readoutAlpha > 0.01, BandRule.position(midi, range), this.vertical);
     const d = dt !== undefined ? dt : 1 / 30;
     this.chestBand = BandRule.fade(this.chestBand, band.chest, d); this.mixBand = BandRule.fade(this.mixBand, band.mix, d); this.uraBand = BandRule.fade(this.uraBand, band.ura, d);
-    return { midi, opacity: this.opacity, hz: this.readoutHz, readoutAlpha, register: this.readoutRegister, chestBandAlpha: this.chestBand, mixBandAlpha: this.mixBand, uraBandAlpha: this.uraBand };
+    return { midi, opacity: this.opacity, hz: this.readoutHz, readoutAlpha, register: shown, chestBandAlpha: this.chestBand, mixBandAlpha: this.mixBand, uraBandAlpha: this.uraBand };
   }
 }
 /** Precomputed 30 fps states for file playback (GaugeTimeline.init). */
@@ -986,6 +1018,6 @@ const MovAudio = (() => {
 })();
 
 const api = { displayRegister, pointerPosition, MovAudio, roundHalfEven, pitchDetect, pitchNote, noteLabel, Resampler, resampleAll, fft, RC, REG, REG_LABEL, RegisterClassifier, Smoother,
-  analyzePitch16k, attachRegister, soundQ, soundRegister, CAL, GUIDE, guideNotes, doremi, midiHz, calibrationFrames, buildCalibration, personalValue, frameValue, thresholdsOf, analyzeMono, LivePitchStream, makeRange, defaultRange, BandRule, GaugeTimeline, buildStates };
+  analyzePitch16k, attachRegister, soundQ, soundRegister, headDense, headSplitRegister, uraRightRegister, CAL, GUIDE, guideNotes, doremi, midiHz, calibrationFrames, buildCalibration, personalValue, frameValue, thresholdsOf, analyzeMono, LivePitchStream, makeRange, defaultRange, BandRule, GaugeTimeline, buildStates };
 if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PMCore = api;
 })(typeof self !== 'undefined' ? self : this);
