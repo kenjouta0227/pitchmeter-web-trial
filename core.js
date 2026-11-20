@@ -108,7 +108,14 @@ function fft(re, im) {
 const RC = {
   weightHrich: -0.9218837323090514, weightCpp: -0.4883626931064059, bias: 8.665875234273317,
   kOct: 6.0, fRefHz: 698.0, mixFloorHz: 440.0,
-  f0Min: 150.0, f0Max: 1400.0, yinThreshold: 0.15, subRelDb: -30.0, subRelOddDb: -40.0, octFixMaxCents: 80.0, maxHarmonicHz: 5000.0,
+  f0Min: 150.0, f0Max: 1400.0, yinThreshold: 0.15, subRelDb: -30.0, subRelOddDb: -40.0, octFixMaxCents: 80.0,
+  // 2026-11-21 けんじょうさん「前後を見て、いきなり倍音を拾ってポインターがぶっ飛ぶのはなし」: 表示の高さのつながり（PitchContinuity）。
+  //  直前の高さの 2倍・3倍・1.5倍・半分・1/3・2/3（±tolCents）へ急に飛んだら、判定側の高さ（窓の中央値）で確かめる。判定側が飛んだ先と同じなら本当の跳躍、
+  //  前の高さのままなら倍音の拾い間違いとして前の高さに直す。飛んだ先が holdFrames（140 ms、判定側も同じ高さなら holdFramesConfirmed 120 ms）続いたら本当の跳躍として受け入れる（それより短い飛びは表示しない）。
+  //  音の出だしで判定側の高さと倍音の関係でずれている時は、判定側の高さに合わせる。
+  pitchCont: { ratios: [2, 3, 1.5, 0.5, 1 / 3, 2 / 3, 4, 0.25], tolCents: 60, minJumpCents: 300, cfTolCents: 70, holdFrames: 7, holdFramesConfirmed: 6, gapFrames: 15, fifths: [1.5, 2 / 3] },
+  // 2026-11-21 判定の表示が一瞬だけ切り替わらないように: 表示中の判定から別の判定へ移るのは switchFrames 続いた時だけ（判定なしから出る時は今までどおり stableFrames）。
+  switchFrames: 13, maxHarmonicHz: 5000.0,
   cppFmax: 8000.0, cppBins: 512, cppFloorDb: 80.0, breathLoHz: 1000.0,
   // 2026-11-17 裏声ミックス / 息漏れ: see Smoother.push
   pHead: 0.85, breathyDb: -30.0, cleanDb: -38.0, relaxedYinThreshold: 0.35, relaxedBreathMin: -30.0, relaxedBreathMax: -6.0,
@@ -282,18 +289,18 @@ class RegisterClassifier {
   }
   analyze(mono, opts) {
     opts = opts || {}; const keep = !!opts.keepFeatures, onProgress = opts.onProgress;
-    const n = this.frameLength, centers = [], states = [], feats = [], pitch = [], probs = [], octs = [];
+    const n = this.frameLength, centers = [], states = [], feats = [], pitch = [], probs = [], octs = [], f0s = [];
     const P = opts.personal || null, sm = new Smoother(P);
-    if (mono.length <= n) return { frameCenters: centers, states, features: feats, pitch, probs, octs };
+    if (mono.length <= n) return { frameCenters: centers, states, features: feats, pitch, probs, octs, f0s };
     let cnt = 0;
     for (let s = 0; s < mono.length - n; s += this.hop) {
       const f = this.features(mono, s, !keep);
       const p = frameValue(P, f);
-      states.push(sm.push(p, f.f0, f.breathDb, f.relaxedF0)); probs.push(p); pitch.push(RegisterClassifier.fallbackCandidate(f)); octs.push(f.octHalved ? f.f0 : 0);
+      states.push(sm.push(p, f.f0, f.breathDb, f.relaxedF0)); probs.push(p); pitch.push(RegisterClassifier.fallbackCandidate(f)); octs.push(f.octHalved ? f.f0 : 0); f0s.push(f.f0 > 0 && f.aperiodicity < RC.gateMaxAperiodicity ? f.f0 : 0);
       centers.push((s + n / 2) / this.sampleRate); if (keep) feats.push(f);
       if (onProgress && (++cnt % 200 === 0)) onProgress(s / mono.length);
     }
-    return { frameCenters: centers, states, features: feats, pitch, probs, octs };
+    return { frameCenters: centers, states, features: feats, pitch, probs, octs, f0s };
   }
   static fallbackPitch(track, seconds) {
     if (!track.pitch.length) return null;
@@ -318,6 +325,45 @@ function octaveFixedHz(hz, octs, lo, hi) {
   if (!(v.length * 2 > hi - lo + 1)) return 0;
   v.sort((a, b) => a - b); const m = v[v.length >> 1];
   return Math.abs(1200 * log2(m / (hz / 2))) <= RC.octFixMaxCents ? hz / 2 : 0;
+}
+class PitchContinuity {
+  constructor() { this.ref = 0; this.gap = 0; this.pk = 0; this.pn = 0; }
+  // hz: 表示の高さ（20 ms ごと）, cf: 判定側の高さ（窓の中央値、無ければ 0）。戻り値: 表示する高さ
+  ratioOf(a, b) { // a が b の 2倍・3倍・1.5倍・半分… なら その倍率、違えば 0
+    const K = RC.pitchCont, c = 1200 * log2(a / b);
+    if (Math.abs(c) < K.minJumpCents) return 0;
+    for (const q of K.ratios) if (Math.abs(c - 1200 * log2(q)) <= K.tolCents) return q;
+    return 0;
+  }
+  push(hz, cf, sure) { // sure: 判定側がはっきり1オクターブ下に直した高さ（octaveFixedHz）→ そのまま受け入れる
+    const K = RC.pitchCont;
+    if (!K) return hz;
+    if (!(hz > 0)) { if (++this.gap > K.gapFrames) { this.ref = 0; this.pn = 0; } return hz; }
+    this.gap = 0;
+    const near = (a, b) => a > 0 && b > 0 && Math.abs(1200 * log2(a / b)) <= K.cfTolCents;
+    const set = (h) => { this.ref = h; return h; };
+    if (!(this.ref > 0)) { // 音の出だし: 判定側の高さと倍音の関係でずれていたら、判定側に合わせる
+      const q = cf > 0 ? this.ratioOf(hz, cf) : 0; this.pn = 0; return set(q ? hz / q : hz);
+    }
+    if (sure || !(Math.abs(1200 * log2(hz / this.ref)) >= K.minJumpCents)) { this.pn = 0; return set(hz); } // ふつうの上がり下がり
+    const k = this.ratioOf(hz, this.ref);
+    if (!k) { // 倍音の倍率ではない大きな飛び: 判定側が違う高さなら判定側の高さ（続いたら受け入れる）
+      if (cf > 0 && !near(cf, hz) && this.pn + 1 < K.holdFrames) { this.pk = -1; this.pn++; return set(cf); }
+      this.pn = 0; return set(hz);
+    }
+    const cand = hz / k;
+    if (near(cf, cand)) { this.pn = 0; return set(cand); } // 判定側は前の高さのまま → 倍音の拾い間違い
+    if (near(cf, hz) && K.fifths.includes(k)) { this.pn = 0; return set(hz); } // 5度の跳躍（1.5倍・2/3）は歌でよくあるので、判定側も同じならすぐ受け入れる
+    if (this.pk === k) this.pn++; else { this.pk = k; this.pn = 1; }
+    if (this.pn >= (near(cf, hz) ? K.holdFramesConfirmed : K.holdFrames)) { this.pn = 0; return set(hz); } // 続いたら本当の跳躍
+    this.ref = cand; return cand;
+  }
+}
+function cfMedian(f0s, lo, hi) {
+  if (!f0s || lo > hi) return 0; const v = [];
+  for (let i = lo; i <= hi; i++) if (f0s[i] > 0) v.push(f0s[i]);
+  if (!(v.length * 2 > hi - lo + 1)) return 0;
+  v.sort((a, b) => a - b); return v[v.length >> 1];
 }
 function medianFallback(pitch, lo, hi) {
   const vals = []; for (let i = lo; i <= hi; i++) if (pitch[i] > 0) vals.push(pitch[i]);
@@ -376,7 +422,8 @@ class Smoother {
     if (c === REG.falsetto && !this.falsettoOn) c = REG.none; // 既定の裏声サンプルなし（2026-11-18）
     if (c === REG.mix && !this.mixOn) c = REG.none; // 既定のミックスサンプルなし（2026-11-18）
     if (c === this.candidate) this.count++; else { this.candidate = c; this.count = 1; }
-    if (this.count >= RC.stableFrames) this.state = c;
+    const need = (RC.switchFrames && this.state !== REG.none && c !== REG.none && c !== REG.chest && c !== this.state) ? RC.switchFrames : RC.stableFrames; // 地声へ戻るのは今までどおり（地声が裏声のまま残らないように）
+    if (this.count >= need) this.state = c;
     return this.state;
   }
 }
@@ -618,12 +665,13 @@ function attachRegister(frames, mono44100, onProgress, personal) {
   const P = personal || null, cl = new RegisterClassifier(44100, classifierOpts(P));
   const track = cl.analyze(mono44100, { onProgress, personal: P });
   if (!track.frameCenters.length) return frames;
-  const first = track.frameCenters[0], hopS = cl.hop / cl.sampleRate;
+  const first = track.frameCenters[0], hopS = cl.hop / cl.sampleRate, pc = new PitchContinuity();
   return frames.map(f => {
     const g = Object.assign({}, f);
+    const c = track.frameCenters, lo = Math.max(0, Math.ceil((f.seconds - RC.fallbackHalfWindowSeconds - first) / hopS - 1e-9)), hi = Math.min(c.length - 1, Math.floor((f.seconds + RC.fallbackHalfWindowSeconds - first) / hopS + 1e-9));
     if (!(f.hz > 0)) { const fb = RegisterClassifier.fallbackPitch(track, f.seconds); if (fb !== null) { g.hz = fb; g.fallback = true; } }
-    else { const c = track.frameCenters, lo = Math.max(0, Math.ceil((f.seconds - RC.fallbackHalfWindowSeconds - first) / hopS - 1e-9)), hi = Math.min(c.length - 1, Math.floor((f.seconds + RC.fallbackHalfWindowSeconds - first) / hopS + 1e-9));
-      const h2 = octaveFixedHz(f.hz, track.octs, lo, hi); if (h2 > 0) { g.hz = h2; g.octaveFixed = true; } }
+    else { const h2 = octaveFixedHz(f.hz, track.octs, lo, hi); if (h2 > 0) { g.hz = h2; g.octaveFixed = true; } }
+    { const h3 = pc.push(g.hz, cfMedian(track.f0s, lo, hi), !!g.octaveFixed); if (h3 !== g.hz) { g.hz = h3; g.continuityFixed = true; } }
     g.register = RegisterClassifier.stateAt(track, f.seconds, hopS, first);
     return g;
   });
@@ -651,7 +699,7 @@ class LivePitchStream {
     this.cl = this.cl || new RegisterClassifier(44100, classifierOpts(this.P));
     this.pcm16 = new Float32Array(0); this.base16 = 0; this.nextCenter = 0;
     this.pcm44 = new Float64Array(0); this.base44 = 0; this.nextStart = 0; this.total44 = 0;
-    this.sm = new Smoother(this.P); this.states = []; this.cands = []; this.octs = []; this.pending = []; this.emitted = 0;
+    this.sm = new Smoother(this.P); this.states = []; this.cands = []; this.octs = []; this.f0s = []; this.pc = new PitchContinuity(); this.pending = []; this.emitted = 0;
   }
   get lagSeconds() { return this.total44 / 44100 - Math.max(0, this.emitted - 1) * 320 / 16000; }
   push(samples) {
@@ -670,7 +718,7 @@ class LivePitchStream {
     while (this.nextStart + n < this.total44) {
       const f = this.cl.features(this.pcm44, this.nextStart - this.base44, true);
       this.states.push(this.sm.push(frameValue(this.P, f), f.f0, f.breathDb, f.relaxedF0));
-      this.cands.push(RegisterClassifier.fallbackCandidate(f)); this.octs.push(f.octHalved ? f.f0 : 0);
+      this.cands.push(RegisterClassifier.fallbackCandidate(f)); this.octs.push(f.octHalved ? f.f0 : 0); this.f0s.push(f.f0 > 0 && f.aperiodicity < RC.gateMaxAperiodicity ? f.f0 : 0);
       this.nextStart += this.cl.hop;
     }
     const drop = this.nextStart - this.base44;
@@ -699,7 +747,7 @@ class LivePitchStream {
     this.pending.splice(0, k); this.emitted += out.length; return out;
   }
   finalize(f) {
-    if (!this.states.length) return f;
+    if (!this.states.length) { const h = this.pc.push(f.hz, 0); return h === f.hz ? f : Object.assign({}, f, { hz: h, continuityFixed: true }); }
     const g = Object.assign({}, f);
     if (!(f.hz > 0)) {
       const first = this.firstCenter, hop = this.states.length > 1 ? this.stateHop : 1;
@@ -711,6 +759,12 @@ class LivePitchStream {
       const lo = Math.max(0, Math.ceil((f.seconds - RC.fallbackHalfWindowSeconds - first) / hop - 1e-9));
       const hi = Math.min(this.states.length - 1, Math.floor((f.seconds + RC.fallbackHalfWindowSeconds - first) / hop + 1e-9));
       const h2 = octaveFixedHz(f.hz, this.octs, lo, hi); if (h2 > 0) { g.hz = h2; g.octaveFixed = true; }
+    }
+    { // 2026-11-21 表示の高さのつながり（ファイル解析と同じ）
+      const first = this.firstCenter, hop = this.states.length > 1 ? this.stateHop : 1;
+      const lo = Math.max(0, Math.ceil((f.seconds - RC.fallbackHalfWindowSeconds - first) / hop - 1e-9));
+      const hi = Math.min(this.states.length - 1, Math.floor((f.seconds + RC.fallbackHalfWindowSeconds - first) / hop + 1e-9));
+      const h3 = this.pc.push(g.hz, cfMedian(this.f0s, lo, hi), !!g.octaveFixed); if (h3 !== g.hz) { g.hz = h3; g.continuityFixed = true; }
     }
     if (f.seconds >= this.firstCenter) g.register = this.states[Math.min(this.states.length - 1, Math.floor((f.seconds - this.firstCenter) / this.stateHop + 1e-9))];
     return g;
