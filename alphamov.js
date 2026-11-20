@@ -110,7 +110,7 @@
     });
     return {
       async init() {
-        w = new Worker('alpha-worker.js?v=' + (root.PM_ALPHA_V || '20261119hevc'));
+        w = new Worker('alpha-worker.js?v=' + (root.PM_ALPHA_V || '20261120lbl'));
         w.onmessage = (e) => { const p = pending.get(e.data.id); if (!p) return; pending.delete(e.data.id); clearTimeout(p.t); if (e.data.ok) p.res(e.data); else fail(p, e.data.error, e.data.why || 'other'); };
         w.onerror = (e) => { const m = String(e && e.message || 'error'); for (const p of pending.values()) fail(p, 'worker: ' + m, /memory/i.test(m) ? 'memory' : 'crash'); pending.clear(); };
         await call({ type: 'init' }, null, 180000);
@@ -130,7 +130,7 @@
     });
     return {
       async init(width, height, fps, crf) {
-        w = new Worker('hevc-worker.js?v=' + (root.PM_ALPHA_V || '20261119hevc'));
+        w = new Worker('hevc-worker.js?v=' + (root.PM_ALPHA_V || '20261120lbl'));
         w.onmessage = (e) => { const p = pending.get(e.data.id); if (!p) return; pending.delete(e.data.id); clearTimeout(p.t); if (e.data.ok) p.res(e.data); else fail(p, e.data.error, e.data.why || 'other'); };
         w.onerror = (e) => { const m = String(e && e.message || 'error'); for (const p of pending.values()) fail(p, 'worker: ' + m, /memory/i.test(m) ? 'memory' : 'crash'); pending.clear(); };
         const r = await call({ type: 'init', w: width, h: height, fps, crf }, null, 120000); return new Uint8Array(r.headers);

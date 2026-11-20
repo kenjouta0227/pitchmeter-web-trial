@@ -121,9 +121,18 @@ const RC = {
   //  ミックス: 既定の判定を再開（mixFloorHz 以上・裏声でない高い音）。サンプル音声を適用中は個人の校正どおり。
   defaultFalsetto: true, defaultFalsettoMinHz: 466.0,
   defaultMix: true,
+  // 2026-11-20 既定（サンプル音声なし）の判定基準 labelRef: けんじょうさんのラベル42区間（藤原・石原・竹中、歌から分離した声）＋
+  //  けんじょうさんの6サンプル（裏1–3・ミックス1–3）の ミックス／裏声 フレーム（387 Hz 以上）を集計して、同じ式（倍音の比 hrich ＋ CPP）の係数を引き直した。
+  //  音声は同梱しない（ここにある数字だけ）。サンプル音声の個人校正は今までどおり上の weight*/bias から始める。
+  //  1人ずつ外した検証のフレーム正解率（ミックス vs 裏声）: 藤原 63→71%, 石原 61→74%, 竹中 59→76%, けんじょう 99→98%。
+  //  区間ごとの一致（判定）62→71%、（表示）54→65%。閾値 pF/pM/pHead とミックス下限 430 Hz（「そう」テストの下限）は全データで選んだ。
+  labelRef: { bias: 3.460066776914001, weightHrich: -0.1391899095963697, weightCpp: -0.6025507640698841, weightH1H2: 0, pFalsetto: 0.60, pMix: 0.45, pHead: 0.60, mixFloorHz: 430.0 },
 };
 const REG = { none: 0, mix: 1, falsetto: 2, chest: 3, uraMix: 4 };
-const REG_LABEL = { 0: null, 1: 'ミックス', 2: '裏声', 3: '地声', 4: '裏声ミックス' }; // 3 (地声) is only produced with a personal calibration that includes 地声
+const REG_LABEL = { 0: null, 1: 'ミックス', 2: '裏声', 3: '地声', 4: '裏声ミックス' };
+// 2026-11-19（けんじょうさん指示「割合が裏声が多い時は全部ミックスってポインターに出して」）:
+// 裏声寄りの判定（裏声・裏声ミックス）は、表示ではすべて「ミックス」にする。判定そのもの（frames の register）は変えない。
+function displayRegister(r) { return r === 2 || r === 4 ? 1 : r; } // 3 (地声) is only produced with a personal calibration that includes 地声
 
 class RegisterClassifier {
   constructor(sampleRate, opts) {
@@ -166,6 +175,7 @@ class RegisterClassifier {
     const H = [];
     for (let k = 1; k * f0 < RC.maxHarmonicHz && k * f0 < this.sampleRate / 2 - binHz * 2; k++) H.push(this.peak(L, k * f0, binHz));
     if (H.length > 1) { let rich = 0; for (let i = 1; i < H.length; i++) rich += Math.pow(10, (H[i] - H[0]) / 10); out.hrichDb = 10 * log10(rich + 1e-6); }
+    out.h1h2 = H.length > 1 ? H[0] - H[1] : NaN; // 2026-11-20 倍音の比（1倍音−2倍音, dB）
     out.cpp8k = this.cpp(L, binHz);
     out.breathDb = this.breath(L, f0, binHz);
     return out;
@@ -242,6 +252,13 @@ class RegisterClassifier {
     return h;
   }
   static probabilityFalsetto(f) { return 1 / (1 + Math.exp(-(RC.bias + RC.weightHrich * RegisterClassifier.hrichEffective(f) + RC.weightCpp * f.cpp8k))); }
+  /** 既定（サンプル音声なし）の p(裏声): RC.labelRef（2026-11-20 ラベル区間の集計）。labelRef が無ければ従来の式。 */
+  static probabilityDefault(f) {
+    const R = RC.labelRef; if (!R) return RegisterClassifier.probabilityFalsetto(f);
+    let z = R.bias + R.weightHrich * RegisterClassifier.hrichEffective(f) + R.weightCpp * f.cpp8k;
+    if (R.weightH1H2 && isFinite(f.h1h2)) z += R.weightH1H2 * f.h1h2;
+    return 1 / (1 + Math.exp(-z));
+  }
   static fallbackCandidate(f) {
     if (!(f.f0 >= RC.fallbackMinHz && f.f0 <= RC.fallbackMaxHz && f.aperiodicity < RC.fallbackMaxAperiodicity && f.rmsDb > RC.gateMinRmsDbfs && RegisterClassifier.hasHarmonics(f) && f.cpp8k >= RC.fallbackMinCpp)) return 0;
     return f.f0;
@@ -326,7 +343,8 @@ class Smoother {
 }
 function thresholdsOf(P) {
   const T = { pF: RC.pFalsetto, pM: RC.pMix, pHead: RC.pHead, breathyDb: RC.breathyDb, cleanDb: RC.cleanDb, mixFloorHz: RC.mixFloorHz, gateMinF0: RC.gateMinF0 };
-  if (P) for (const k in T) if (typeof P[k] === 'number' && isFinite(P[k])) T[k] = P[k];
+  if (P) { for (const k in T) if (typeof P[k] === 'number' && isFinite(P[k])) T[k] = P[k]; }
+  else if (RC.labelRef) { const R = RC.labelRef; T.pF = R.pFalsetto; T.pM = R.pMix; T.mixFloorHz = R.mixFloorHz; if (isFinite(R.pHead)) T.pHead = R.pHead; } // 2026-11-20 既定の判定基準
   return T;
 }
 /** Per-frame smoother value (default or personal). */
@@ -337,7 +355,7 @@ function frameValue(P, f) {
     if (fr >= gateMin && fr <= RC.gateMaxF0 && f.rmsDb > RC.gateMinRmsDbfs && f.breathDb >= (P && isFinite(P.breathyDb) ? Math.max(RC.relaxedBreathMin, P.breathyDb) : RC.relaxedBreathMin) && f.breathDb <= RC.relaxedBreathMax) return CAL.BREATHY;
     return null;
   }
-  if (!P) return RegisterClassifier.isValid(f) ? RegisterClassifier.probabilityFalsetto(f) : null;
+  if (!P) return RegisterClassifier.isValid(f) ? RegisterClassifier.probabilityDefault(f) : null;
   return personalValue(P, f);
 }
 
@@ -626,6 +644,12 @@ function pitchDetectWindow(buf, center) { return pitchDetect(buf, buf.length, ce
 
 // ---------------- GaugeRange / GaugeBandRule / timelines ----------------
 function defaultRange() { return { low: 52, high: 74, split1: 64, split2: 74, acceptedLow: 0, acceptedHigh: 0 }; }
+// 2026-11-20: ポインターの位置 = 声の高さの目安（男性の声）。真ん中（50%）がファ♯4 付近（約373 Hz）、1半音で約2.8%。
+//  0% ≈ 131 Hz、100% ≈ 1000 Hz。歌った範囲（最低音・最高音）には合わせない（範囲の端の音が外れ値だと全体がずれるため）。
+//  けんじょうさんの動画（地声:裏声 のテロップ）にウェブ版の解析（歌声＋補完）で合わせた: 5:5 → 50〜52%、4:6 → 58〜64%、3:7 → 69%（平均のずれ 1.5%）。
+//  2026-11-19 版（最低音〜最高音を 14%〜86%）は、ウェブ版の解析では 5:5 が 25%、3:7 が 49% になっていた。
+const POINTER_CENTER_MIDI = 66.15, POINTER_SEMITONES = 35.4;
+function pointerPosition(midi, range) { return Math.min(1, Math.max(0, 0.5 + (midi - POINTER_CENTER_MIDI) / POINTER_SEMITONES)); }
 function makeRange(frames) {
   if (frames.length < 5) return defaultRange();
   const adopted = new Uint8Array(frames.length); let any = false;
@@ -662,7 +686,7 @@ const BandRule = {
   },
   fadeSeconds: 0.05,
   fade(v, t, dt) { return v + (t - v) * (1 - Math.exp(-dt / BandRule.fadeSeconds)); },
-  position(midi, range) { return Math.min(1, Math.max(0, (midi - range.low) / (range.high - range.low))); },
+  position(midi, range) { return pointerPosition(midi, range); },
 };
 /** Incremental timeline (GaugeTimeline at 30 fps / LiveGaugeTimeline). */
 class GaugeTimeline {
@@ -682,7 +706,7 @@ class GaugeTimeline {
         this.lastPitch = ft; }
     } this.index = end; }
     const hz = end >= 0 ? fr[end].hz : 0;
-    if (hz > 0) { this.lastVoiced = t; this.readoutHz = hz; this.readoutTime = t; this.readoutRegister = fr[end].register; }
+    if (hz > 0) { this.lastVoiced = t; this.readoutHz = hz; this.readoutTime = t; this.readoutRegister = displayRegister(fr[end].register); }
     const target = hz > 0 ? 1 : Math.max(0, 1 - Math.max(0, t - this.lastVoiced - 0.14) / 0.35);
     this.opacity += (target - this.opacity) * (1 - Math.exp(-(1 / 30) / 0.10));
     const fade = Math.min(1, Math.max(0, (t - this.readoutTime) / 0.8));
@@ -791,7 +815,7 @@ const MovAudio = (() => {
   return { demux, toADTS, parseASC };
 })();
 
-const api = { MovAudio, roundHalfEven, pitchDetect, pitchNote, noteLabel, Resampler, resampleAll, fft, RC, REG, REG_LABEL, RegisterClassifier, Smoother,
+const api = { displayRegister, pointerPosition, MovAudio, roundHalfEven, pitchDetect, pitchNote, noteLabel, Resampler, resampleAll, fft, RC, REG, REG_LABEL, RegisterClassifier, Smoother,
   analyzePitch16k, attachRegister, CAL, GUIDE, guideNotes, doremi, midiHz, calibrationFrames, buildCalibration, personalValue, frameValue, thresholdsOf, analyzeMono, LivePitchStream, makeRange, defaultRange, BandRule, GaugeTimeline, buildStates };
 if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PMCore = api;
 })(typeof self !== 'undefined' ? self : this);

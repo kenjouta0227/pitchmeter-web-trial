@@ -46,7 +46,7 @@ function render(ctx, w, h, state, range, appearance) {
     ctx.ellipse(x + ww * 0.084 + ww * 0.416, y + hh * 0.032 + hh * 0.468, ww * 0.416, hh * 0.468, 0, 0, Math.PI * 2); ctx.clip();
     ctx.drawImage(brand, x, y, ww, hh); ctx.restore(); };
   const fixed = A.fixed(a), vertical = A.isVertical(a);
-  const position = Math.min(1, Math.max(0, (state.midi - range.low) / (range.high - range.low)));
+  const position = C.pointerPosition(state.midi, range); // 2026-11-20 声の高さの目安（ファ♯4≈373Hz が真ん中）。core.js pointerPosition
   const cen = (range.split1 + range.split2) / 2, half = (range.split2 - range.split1) / 2;
   let near = Math.min(1, Math.max(0, 1 - Math.abs(state.midi - cen) / half)), mix = near * near * (3 - 2 * near);
   if (!fixed && state.midi > cen) {
