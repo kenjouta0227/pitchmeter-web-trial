@@ -108,7 +108,7 @@ function fft(re, im) {
 const RC = {
   weightHrich: -0.9218837323090514, weightCpp: -0.4883626931064059, bias: 8.665875234273317,
   kOct: 6.0, fRefHz: 698.0, mixFloorHz: 440.0,
-  f0Min: 150.0, f0Max: 1400.0, yinThreshold: 0.15, subRelDb: -30.0, maxHarmonicHz: 5000.0,
+  f0Min: 150.0, f0Max: 1400.0, yinThreshold: 0.15, subRelDb: -30.0, subRelOddDb: -40.0, octFixMaxCents: 80.0, maxHarmonicHz: 5000.0,
   cppFmax: 8000.0, cppBins: 512, cppFloorDb: 80.0, breathLoHz: 1000.0,
   // 2026-11-17 裏声ミックス / 息漏れ: see Smoother.push
   pHead: 0.85, breathyDb: -30.0, cleanDb: -38.0, relaxedYinThreshold: 0.35, relaxedBreathMin: -30.0, relaxedBreathMax: -6.0,
@@ -117,19 +117,32 @@ const RC = {
   fallbackMinHz: 150.0, fallbackMaxHz: 1100.0, fallbackMaxAperiodicity: 0.15, fallbackMinCpp: 2.0,
   fallbackHalfWindowSeconds: 0.035, fallbackMinFrames: 5, fallbackMaxCents: 100.0,
   // 2026-11-18 裏声 / ミックスの既定サンプル（ura1–3, mix1–3）をリセット → 2026-11-19 既定の表示を次の条件で再開:
-  //  裏声: サンプル音声（個人校正）がないときは defaultFalsettoMinHz 以上の高い音だけ（それより低い裏声側の判定は「判定なし」）。
   //  ミックス: 既定の判定を再開（mixFloorHz 以上・裏声でない高い音）。サンプル音声を適用中は個人の校正どおり。
-  defaultFalsetto: true, defaultFalsettoMinHz: 466.0,
+  //  2026-11-20 「そう」の決まり（既定の裏声は 466 Hz 以上だけ＝「そうしたいんだ」の「そう」だけ裏声）は、けんじょうさんの指示で削除。
+  defaultFalsetto: true,
   defaultMix: true,
+  // 2026-11-20 「裏声orミックス」（既定の判定だけ）: 窓の p(裏声) の中央値が 0.45〜0.50（ミックスと裏声の境目）なら 裏声orミックス。
+  //  息漏れ（breathyDb 以上）の所は 裏声 寄り: 裏声はそのまま、裏声orミックスになる所も 裏声。42区間＋けんじょうさんの6サンプルで選んだ。
+  uraOrMix: { lo: 0.45, hi: 0.50, keepBreathy: true, breathyUra: true }, // 2026-11-20 hi は pFalsetto に合わせて 0.50
+  // 2026-11-20 既定の 地声（けんじょうさん C案）: 地声テイク31本＋ラベルの地声区間（300 Hz 以上のフレーム）の平均と共分散の逆行列（数字だけ）。
+  //  ミックスの基準（ミックス区間＋ミックス1〜3）も持ち、地声の基準からの距離が cutoff 以下かつ ミックスの基準の mixRatio 倍以下の所だけ 地声。
+  //  cutoff・mixRatio・holdFrac は歌手を1人ずつ抜いた確認（LOSO）で選んだ。
+  // 2026-11-21 音色の基準 spotRef（けんじょうさん指示「ヘルツだけでなく音色で」）: けんじょうさんの動画 36.3〜38.0秒（地声、本当の高さ約338 Hz）の
+  //  音色＝倍音の並び方（1倍音−2倍音 h1h2・倍音の多さ hEff・声の澄み具合 CPP）の平均と共分散の逆行列（数字だけ。音声は同梱しない）。
+  //  この音色からの距離（マハラノビス、次元数で割る）が cutoff 以下のフレームは「同じ音色」＝地声の票。窓の holdFrac 以上が同じ音色なら 地声 と出す。
+  //  cutoff 2.2: 裏声のフレーム（裏1〜3・集めた裏声テイク30本・藤原/石原/竹中の裏声区間）はどれも 2.67 以上離れている（1フレームも入らない）。
+  //  フォルマント（F1/F2）・明るさ（高い帯域の量）も調べたが、歌手や録り方で向きが逆になり 裏声/地声 を分けられなかったので使わない。
+  spotRef: {feats: ['h1h2', 'hEff', 'cpp'], mu: [-29.4629, 23.4932, 4.8797], inv: [[13.937823, 15.546224, 1.964663], [15.546224, 17.416133, 2.284182], [1.964663, 2.284182, 2.343785]], cutoff: 2.2, holdFrac: 0.2},
+  chestRef: {feats: ['hEff', 'cpp', 'h1h2', 'st'], mu: [7.5989, 5.224, -10.0142, -3.4154], inv: [[0.107012, -0.044468, 0.096082, -0.037387], [-0.044468, 0.546931, -0.024708, -0.019839], [0.096082, -0.024708, 0.09566, -0.036766], [-0.037387, -0.019839, -0.036766, 0.185272]], holdFrac: 0.2, mix: {mu: [8.7667, 5.631, -8.6917, 1.5338], inv: [[0.116069, -0.005543, 0.106705, -0.011658], [-0.005543, 0.378544, -0.001667, 0.005536], [0.106705, -0.001667, 0.105101, -0.01356], [-0.011658, 0.005536, -0.01356, 0.056121]]}, mixRatio: 1.3, cutoff: 1.1},
   // 2026-11-20 既定（サンプル音声なし）の判定基準 labelRef: けんじょうさんのラベル42区間（藤原・石原・竹中、歌から分離した声）＋
   //  けんじょうさんの6サンプル（裏1–3・ミックス1–3）の ミックス／裏声 フレーム（387 Hz 以上）を集計して、同じ式（倍音の比 hrich ＋ CPP）の係数を引き直した。
   //  音声は同梱しない（ここにある数字だけ）。サンプル音声の個人校正は今までどおり上の weight*/bias から始める。
   //  1人ずつ外した検証のフレーム正解率（ミックス vs 裏声）: 藤原 63→71%, 石原 61→74%, 竹中 59→76%, けんじょう 99→98%。
-  //  区間ごとの一致（判定）62→71%、（表示）54→65%。閾値 pF/pM/pHead とミックス下限 430 Hz（「そう」テストの下限）は全データで選んだ。
-  labelRef: { bias: 3.460066776914001, weightHrich: -0.1391899095963697, weightCpp: -0.6025507640698841, weightH1H2: 0, pFalsetto: 0.60, pMix: 0.45, pHead: 0.60, mixFloorHz: 430.0 },
+  //  区間ごとの一致（判定）62→71%、（表示）54→65%。閾値 pF/pM/pHead は全データで選んだ。
+  labelRef: { bias: 3.460066776914001, weightHrich: -0.1391899095963697, weightCpp: -0.6025507640698841, weightH1H2: 0, pFalsetto: 0.50, pMix: 0.45, pHead: 0.50, mixFloorHz: 0 }, // 2026-11-20 裏声を最優先（けんじょうさん）: pFalsetto・pHead 0.60→0.50（0.45 以下は 地声テイク chest_010 が崩れる） // 2026-11-20 ミックスの下限（430 Hz 以上だけミックス＝「そう」の決まり）は削除
 };
-const REG = { none: 0, mix: 1, falsetto: 2, chest: 3, uraMix: 4 };
-const REG_LABEL = { 0: null, 1: 'ミックス', 2: '裏声', 3: '地声', 4: '裏声ミックス' };
+const REG = { none: 0, mix: 1, falsetto: 2, chest: 3, uraMix: 4, uraOrMix: 5 };
+const REG_LABEL = { 0: null, 1: 'ミックス', 2: '裏声', 3: '地声', 4: '裏声orミックス', 5: '裏声orミックス' }; // 2026-11-20 けんじょうさん指示: 裏声ミックス(4)も表示は「裏声orミックス」。判定(コード4/5)はそのまま
 // 2026-11-19（けんじょうさん指示「割合が裏声が多い時は全部ミックスってポインターに出して」）:
 // 裏声寄りの判定（裏声・裏声ミックス）は、表示ではすべて「ミックス」にする。判定そのもの（frames の register）は変えない。
 // 2026-11-20 けんじょうさん指示で元に戻した: 裏声は裏声、裏声ミックスは裏声ミックスのまま表示する。
@@ -172,7 +185,7 @@ class RegisterClassifier {
     const binHz = this.sampleRate / n;
     if (relaxed) { const fr = this.octaveCheck(L, relaxed, binHz); out.relaxedF0 = fr; out.breathDb = this.breath(L, fr, binHz); return out; }
     const f0 = this.octaveCheck(L, f0yin, binHz);
-    out.f0 = f0;
+    out.f0 = f0; out.octHalved = f0 < 0.75 * f0yin; // 2026-11-21 1オクターブ下に直した（高さの表示も合わせる）
     const H = [];
     for (let k = 1; k * f0 < RC.maxHarmonicHz && k * f0 < this.sampleRate / 2 - binHz * 2; k++) H.push(this.peak(L, k * f0, binHz));
     if (H.length > 1) { let rich = 0; for (let i = 1; i < H.length; i++) rich += Math.pow(10, (H[i] - H[0]) / 10); out.hrichDb = 10 * log10(rich + 1e-6); }
@@ -222,7 +235,10 @@ class RegisterClassifier {
       const h = f0 / 2; if (h < RC.f0Min) break;
       const ref = Math.max(this.peak(L, f0, binHz), 2 * f0 < this.sampleRate / 2 - 2 * binHz ? this.peak(L, 2 * f0, binHz) : -1e9);
       const a = this.peak(L, h, binHz), b = this.peak(L, 3 * h, binHz);
-      if (a > ref + RC.subRelDb && b > ref + RC.subRelDb && a > this.at(L, 0.75 * f0, binHz) + 10 && b > this.at(L, 1.25 * f0, binHz) + 10) f0 = h; else break;
+      // 2026-11-20 1倍音がとても弱い地声（けんじょうさんの動画 36〜38秒: 約338 Hz、1倍音が2倍音より約32 dB 小さい）は 2倍の高さ（約677 Hz）と見誤って
+      //  倍音が少なく見え 裏声 になっていた。3倍音（3h）がはっきりある時だけ、1倍音（h）の条件を subRelOddDb まで弱める。
+      const aMin = (b > ref + RC.subRelDb && b > this.at(L, 1.25 * f0, binHz) + 10) ? Math.min(RC.subRelDb, RC.subRelOddDb) : RC.subRelDb;
+      if (a > ref + aMin && b > ref + RC.subRelDb && a > this.at(L, 0.75 * f0, binHz) + 10 && b > this.at(L, 1.25 * f0, binHz) + 10) f0 = h; else break;
     }
     return f0;
   }
@@ -266,18 +282,18 @@ class RegisterClassifier {
   }
   analyze(mono, opts) {
     opts = opts || {}; const keep = !!opts.keepFeatures, onProgress = opts.onProgress;
-    const n = this.frameLength, centers = [], states = [], feats = [], pitch = [], probs = [];
+    const n = this.frameLength, centers = [], states = [], feats = [], pitch = [], probs = [], octs = [];
     const P = opts.personal || null, sm = new Smoother(P);
-    if (mono.length <= n) return { frameCenters: centers, states, features: feats, pitch, probs };
+    if (mono.length <= n) return { frameCenters: centers, states, features: feats, pitch, probs, octs };
     let cnt = 0;
     for (let s = 0; s < mono.length - n; s += this.hop) {
       const f = this.features(mono, s, !keep);
       const p = frameValue(P, f);
-      states.push(sm.push(p, f.f0, f.breathDb, f.relaxedF0)); probs.push(p); pitch.push(RegisterClassifier.fallbackCandidate(f));
+      states.push(sm.push(p, f.f0, f.breathDb, f.relaxedF0)); probs.push(p); pitch.push(RegisterClassifier.fallbackCandidate(f)); octs.push(f.octHalved ? f.f0 : 0);
       centers.push((s + n / 2) / this.sampleRate); if (keep) feats.push(f);
       if (onProgress && (++cnt % 200 === 0)) onProgress(s / mono.length);
     }
-    return { frameCenters: centers, states, features: feats, pitch, probs };
+    return { frameCenters: centers, states, features: feats, pitch, probs, octs };
   }
   static fallbackPitch(track, seconds) {
     if (!track.pitch.length) return null;
@@ -292,6 +308,16 @@ class RegisterClassifier {
     const i = Math.min(track.states.length - 1, Math.floor((seconds - firstCenter) / hopSeconds + 1e-9));
     return track.states[i];
   }
+}
+/** 2026-11-21 高さの表示（16 kHz の pitchDetect）を、判定側が1オクターブ下に直した高さに合わせる。けんじょうさんの動画 36〜38秒:
+ *  表示 676.9 Hz・hiE → 本当は約338 Hz（mid2E）の地声。窓（±fallbackHalfWindowSeconds）の判定フレームの過半数が「1オクターブ下に直した」で、
+ *  その中央値が 表示の高さの半分から octFixMaxCents 以内の時だけ、表示を半分にする。それ以外（本物の高い音）はそのまま。 */
+function octaveFixedHz(hz, octs, lo, hi) {
+  if (!(hz > 0) || !octs || lo > hi) return 0;
+  const v = []; for (let i = lo; i <= hi; i++) if (octs[i] > 0) v.push(octs[i]);
+  if (!(v.length * 2 > hi - lo + 1)) return 0;
+  v.sort((a, b) => a - b); const m = v[v.length >> 1];
+  return Math.abs(1200 * log2(m / (hz / 2))) <= RC.octFixMaxCents ? hz / 2 : 0;
 }
 function medianFallback(pitch, lo, hi) {
   const vals = []; for (let i = lo; i <= hi; i++) if (pitch[i] > 0) vals.push(pitch[i]);
@@ -311,6 +337,8 @@ function medianFallback(pitch, lo, hi) {
 class Smoother {
   constructor(personal) { this.history = []; this.bhist = []; this.candidate = REG.none; this.count = 0; this.state = REG.none; this.T = thresholdsOf(personal); this.personal = !!personal; this.falsettoOn = !!personal || RC.defaultFalsetto; this.mixOn = !!personal || RC.defaultMix; }
   push(p, f0, breath, relaxedF0) {
+    const spot = p === CAL.SPOT; if (spot) p = CAL.CHEST; // 2026-11-21 spotRef と同じ音色（地声の票として数える）
+    this.shist = this.shist || []; this.shist.push(spot); if (this.shist.length > RC.medianFrames) this.shist.shift();
     const T = this.T, med = (a) => a.length % 2 ? a[a.length >> 1] : (a[a.length / 2 - 1] + a[a.length / 2]) / 2;
     this.history.push(p); this.bhist.push(p === null || p === CAL.CHEST ? NaN : breath);
     if (this.history.length > RC.medianFrames) { this.history.shift(); this.bhist.shift(); }
@@ -322,20 +350,30 @@ class Smoother {
       else {
         const ps = vals.filter(v => v !== CAL.CHEST).map(v => v === CAL.BREATHY ? 1 : v).sort((a, b) => a - b);
         if (ps.length) {
-          const m = med(ps);
+          const m = med(ps); let breathy = false;
           c = m >= T.pF ? REG.falsetto : (m <= T.pM ? REG.mix : REG.uraMix);
           const bs = this.bhist.filter(isFinite).sort((a, b) => a - b);
-          if (bs.length) { const mb = med(bs);
+          if (bs.length) { const mb = med(bs); breathy = mb >= T.breathyDb;
             if (c === REG.uraMix && mb >= T.breathyDb && m >= (T.pF + T.pM) / 2) c = REG.falsetto;
             else if (c === REG.falsetto && m < T.pHead && mb <= T.cleanDb) c = REG.uraMix; }
           if (p === CAL.BREATHY && c !== REG.falsetto) c = REG.none;
           if ((c === REG.mix || c === REG.uraMix) && f0 > 0 && f0 < T.mixFloorHz) c = REG.none;
           if ((c === REG.mix || c === REG.uraMix) && !(f0 > 0)) c = REG.none;
+          // 2026-11-20 「裏声orミックス」: 既定の判定（サンプル音声なし）で、裏声とミックスの境目に近い所（窓の p(裏声) の中央値が U.lo〜U.hi）。
+          //  判定の閾値は変えない。息漏れ（breathyDb 以上）の裏声はそのまま 裏声。
+          // 2026-11-20 既定の 地声: 窓の中に 地声に近いフレームが holdFrac 以上ある間は、ミックス系（ミックス・裏声ミックス・裏声orミックス）を出さない（判定なし）。
+          const H = RC.chestRef;
+          if (H && H.holdFrac && !this.personal && chestN >= H.holdFrac * vals.length && (c === REG.mix || c === REG.uraMix)) c = REG.none;
+          const U = RC.uraOrMix;
+          if (U && !this.personal && f0 > 0 && m >= U.lo && m <= U.hi && (c === REG.mix || c === REG.uraMix || (c === REG.falsetto && !(U.keepBreathy && breathy)))) c = REG.uraOrMix;
+          if (U && U.breathyUra && !this.personal && c === REG.uraOrMix && breathy) c = REG.falsetto;
+          // 2026-11-21 窓の holdFrac 以上が 動画 36〜38秒と同じ音色なら、裏声・ミックス系ではなく 地声。
+          const S = RC.spotRef, spotN = this.shist.filter((x, i) => x && this.history[i] !== null).length;
+          if (S && !this.personal && spotN > 0 && spotN >= S.holdFrac * vals.length && c !== REG.none) c = REG.chest;
         }
       }
     }
     if (c === REG.falsetto && !this.falsettoOn) c = REG.none; // 既定の裏声サンプルなし（2026-11-18）
-    if (c === REG.falsetto && !this.personal && !((f0 > 0 ? f0 : (p === CAL.BREATHY ? relaxedF0 : 0)) >= RC.defaultFalsettoMinHz)) c = REG.none; // 既定の裏声は高い音だけ（2026-11-19。息漏れフレームは緩いピッチで判定）
     if (c === REG.mix && !this.mixOn) c = REG.none; // 既定のミックスサンプルなし（2026-11-18）
     if (c === this.candidate) this.count++; else { this.candidate = c; this.count = 1; }
     if (this.count >= RC.stableFrames) this.state = c;
@@ -348,6 +386,33 @@ function thresholdsOf(P) {
   else if (RC.labelRef) { const R = RC.labelRef; T.pF = R.pFalsetto; T.pM = R.pMix; T.mixFloorHz = R.mixFloorHz; if (isFinite(R.pHead)) T.pHead = R.pHead; } // 2026-11-20 既定の判定基準
   return T;
 }
+/** 2026-11-20 既定の 地声（サンプル音声なし）: RC.chestRef（地声テイク・地声区間の平均と共分散＝数字だけ）からの距離（マハラノビス、次元数で割る）が cutoff 以下、
+ *  かつ 裏声らしさ p が pFalsetto 未満のフレームだけ 地声。それ以外は今までどおり（null を返す）。高さの下限・上限（「〜Hz 以上は」）は使わない。 */
+function chestRefFeature(name, f) {
+  switch (name) { case 'hEff': return RegisterClassifier.hrichEffective(f); case 'cpp': return f.cpp8k; case 'h1h2': return f.h1h2; case 'breath': return f.breathDb; case 'st': return 12 * log2(f.f0 / 440); }
+  return NaN;
+}
+function spotLike(f) {
+  const K = RC.spotRef;
+  if (!K || !(f.f0 > 0 && f.aperiodicity < RC.gateMaxAperiodicity && f.rmsDb > RC.gateMinRmsDbfs && RegisterClassifier.hasHarmonics(f))) return false;
+  const v = K.feats.map(k => k === 'hEff' ? RegisterClassifier.hrichEffective(f) : k === 'cpp' ? f.cpp8k : f.h1h2);
+  if (!v.every(isFinite)) return false;
+  let q = 0; for (let i = 0; i < v.length; i++) for (let j = 0; j < v.length; j++) q += (v[i] - K.mu[i]) * K.inv[i][j] * (v[j] - K.mu[j]);
+  return Math.sqrt(Math.max(0, q) / v.length) <= K.cutoff;
+}
+function defaultChest(f) {
+  const K = RC.chestRef;
+  if (!K || !(f.f0 > 0 && f.aperiodicity < RC.gateMaxAperiodicity && f.rmsDb > RC.gateMinRmsDbfs && f.f0 <= RC.gateMaxF0 && RegisterClassifier.hasHarmonics(f))) return null;
+  const n = K.feats.length, z = new Array(n);
+  for (let i = 0; i < n; i++) { const v = chestRefFeature(K.feats[i], f); if (!isFinite(v)) return null; z[i] = v - K.mu[i]; }
+  const dist = (mu, inv) => { let s = 0; for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) s += (z[i] + K.mu[i] - mu[i]) * inv[i][j] * (z[j] + K.mu[j] - mu[j]); return Math.sqrt(Math.max(0, s) / n); };
+  const dc = dist(K.mu, K.inv);
+  if (!(dc <= K.cutoff)) return null;
+  if (K.mix && !(dc <= K.mixRatio * dist(K.mix.mu, K.mix.inv))) return null; // ミックスの基準の方が近い所は 地声にしない
+  const pF = RC.labelRef ? RC.labelRef.pFalsetto : RC.pFalsetto;
+  if (RegisterClassifier.probabilityDefault(f) >= pF) return null;
+  return CAL.CHEST;
+}
 /** Per-frame smoother value (default or personal). */
 function frameValue(P, f) {
   const gateMin = P ? P.gateMinF0 : RC.gateMinF0;
@@ -356,7 +421,11 @@ function frameValue(P, f) {
     if (fr >= gateMin && fr <= RC.gateMaxF0 && f.rmsDb > RC.gateMinRmsDbfs && f.breathDb >= (P && isFinite(P.breathyDb) ? Math.max(RC.relaxedBreathMin, P.breathyDb) : RC.relaxedBreathMin) && f.breathDb <= RC.relaxedBreathMax) return CAL.BREATHY;
     return null;
   }
-  if (!P) return RegisterClassifier.isValid(f) ? RegisterClassifier.probabilityDefault(f) : null;
+  if (!P) {
+    if (spotLike(f)) return CAL.SPOT; // 2026-11-21 動画 36〜38秒と同じ音色 → 地声の票
+    const c = defaultChest(f); if (c !== null) return c;
+    return RegisterClassifier.isValid(f) ? RegisterClassifier.probabilityDefault(f) : null;
+  }
   return personalValue(P, f);
 }
 
@@ -365,7 +434,7 @@ function frameValue(P, f) {
 const CAL = {
   // enabled (2026-11-17): app.js passes buildCalibration(samples) only when samples exist AND 「サンプル音声を適用」 is on;
   // otherwise personal = null and judging is exactly the published default.
-  enabled: true, version: 2, CHEST: 2, BREATHY: 3, // smoother markers (p values are 0…1)
+  enabled: true, version: 2, CHEST: 2, BREATHY: 3, SPOT: 4, // smoother markers (p values are 0…1)
   chestMinHz: 80, sampleMinHz: 150, sampleMaxHz: 1000, minVoicedSeconds: 2.0, maxFrames: 900, targetToleranceSemis: 3,
   margin: 1.0, maxShift: 8.0, lambda: 0.01, fitIters: 40, quantLow: 0.1, quantHigh: 0.9, headMargin: 0.5, tailLow: 0.02, tailHigh: 0.98, uramixLowMargin: 0.0, minNoteFrames: 10, minBand: 0.4,
   splitMinDb: -45.0, splitMaxDb: -25.0, floorRatio: 0.94, floorQuantile: 0.05, minGateHz: 150, breathSplitMinDb: 3.0,
@@ -553,6 +622,8 @@ function attachRegister(frames, mono44100, onProgress, personal) {
   return frames.map(f => {
     const g = Object.assign({}, f);
     if (!(f.hz > 0)) { const fb = RegisterClassifier.fallbackPitch(track, f.seconds); if (fb !== null) { g.hz = fb; g.fallback = true; } }
+    else { const c = track.frameCenters, lo = Math.max(0, Math.ceil((f.seconds - RC.fallbackHalfWindowSeconds - first) / hopS - 1e-9)), hi = Math.min(c.length - 1, Math.floor((f.seconds + RC.fallbackHalfWindowSeconds - first) / hopS + 1e-9));
+      const h2 = octaveFixedHz(f.hz, track.octs, lo, hi); if (h2 > 0) { g.hz = h2; g.octaveFixed = true; } }
     g.register = RegisterClassifier.stateAt(track, f.seconds, hopS, first);
     return g;
   });
@@ -580,7 +651,7 @@ class LivePitchStream {
     this.cl = this.cl || new RegisterClassifier(44100, classifierOpts(this.P));
     this.pcm16 = new Float32Array(0); this.base16 = 0; this.nextCenter = 0;
     this.pcm44 = new Float64Array(0); this.base44 = 0; this.nextStart = 0; this.total44 = 0;
-    this.sm = new Smoother(this.P); this.states = []; this.cands = []; this.pending = []; this.emitted = 0;
+    this.sm = new Smoother(this.P); this.states = []; this.cands = []; this.octs = []; this.pending = []; this.emitted = 0;
   }
   get lagSeconds() { return this.total44 / 44100 - Math.max(0, this.emitted - 1) * 320 / 16000; }
   push(samples) {
@@ -599,7 +670,7 @@ class LivePitchStream {
     while (this.nextStart + n < this.total44) {
       const f = this.cl.features(this.pcm44, this.nextStart - this.base44, true);
       this.states.push(this.sm.push(frameValue(this.P, f), f.f0, f.breathDb, f.relaxedF0));
-      this.cands.push(RegisterClassifier.fallbackCandidate(f));
+      this.cands.push(RegisterClassifier.fallbackCandidate(f)); this.octs.push(f.octHalved ? f.f0 : 0);
       this.nextStart += this.cl.hop;
     }
     const drop = this.nextStart - this.base44;
@@ -635,6 +706,11 @@ class LivePitchStream {
       const lo = Math.max(0, Math.ceil((f.seconds - RC.fallbackHalfWindowSeconds - first) / hop - 1e-9));
       const hi = Math.min(this.states.length - 1, Math.floor((f.seconds + RC.fallbackHalfWindowSeconds - first) / hop + 1e-9));
       if (lo <= hi) { const m = medianFallback(this.cands, lo, hi); if (m !== null) { g.hz = m; g.fallback = true; } }
+    } else { // 2026-11-21 ファイル解析（attachRegister）と同じ: 1オクターブ下に直した高さに表示を合わせる
+      const first = this.firstCenter, hop = this.states.length > 1 ? this.stateHop : 1;
+      const lo = Math.max(0, Math.ceil((f.seconds - RC.fallbackHalfWindowSeconds - first) / hop - 1e-9));
+      const hi = Math.min(this.states.length - 1, Math.floor((f.seconds + RC.fallbackHalfWindowSeconds - first) / hop + 1e-9));
+      const h2 = octaveFixedHz(f.hz, this.octs, lo, hi); if (h2 > 0) { g.hz = h2; g.octaveFixed = true; }
     }
     if (f.seconds >= this.firstCenter) g.register = this.states[Math.min(this.states.length - 1, Math.floor((f.seconds - this.firstCenter) / this.stateHop + 1e-9))];
     return g;
@@ -682,7 +758,7 @@ const BandRule = {
     if (!judgmentVisible) return { chest: 1, mix: 1, ura: 1 };
     const at = BandRule.labelPositions(vertical);
     // 2026-11-17 23:13: 地声・裏声・ミックス・裏声ミックスのどの判定中も、固定表示（地声・ミックス・裏声）をすべて消す。判定が外れたら元に戻る
-    if (register === REG.falsetto || register === REG.mix || register === REG.uraMix || register === REG.chest) return { chest: 0, mix: 0, ura: 0 };
+    if (register === REG.falsetto || register === REG.mix || register === REG.uraMix || register === REG.uraOrMix || register === REG.chest) return { chest: 0, mix: 0, ura: 0 };
     return { chest: 1, mix: 1, ura: 1 };
   },
   fadeSeconds: 0.05,
