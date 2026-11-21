@@ -66,7 +66,7 @@ const samples = (() => {
     { k: 'chest', name: '地声', guideNote: '地声でいちばん低い音から、ミックスに変わる直前まで' },
     { k: 'mix', name: 'ミックス', guideNote: 'ミックスボイスに変わったところから、裏声に変わる直前まで' },
     { k: 'ura', name: '裏声', guideNote: '裏声に変わったところから上（息まじりの裏声もここ）' },
-    { k: 'uramix', name: '裏声ミックス', guideNote: 'ヘッドボイス寄りの、張りがあって息もれの少ない高い声' },
+    { k: 'uramix', name: 'ミックス（裏声寄り）', guideNote: '芯があって息もれの少ない、裏声寄りの高い声' },
   ];
   let data = {}, apply = true, cache = null, cacheSig = '';
   try { data = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { data = {}; }
@@ -309,7 +309,7 @@ const file = (() => {
   function runProcess(analysis, audio, onProgress) {
     return new Promise((resolve, reject) => {
       const my = ++job; pendingReject = reject;
-      if (!worker) worker = new Worker('worker.js?v=20261121head');
+      if (!worker) worker = new Worker('worker.js?v=20261121ng0');
       worker.onmessage = (e) => {
         const m = e.data; if (my !== job) return;
         if (m.type === 'progress') onProgress(m.value, m.label);
@@ -795,14 +795,14 @@ const live = (() => {
       track.onended = () => stop('マイクが外れたので停止しました。つなぎ直してから「開始」を押してください。');
       devHandler = () => stop('マイクの接続が変わったので停止しました。もう一度「開始」を押してください。');
       if (navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', devHandler);
-      worker = new Worker('worker.js?v=20261121head'); tl = new C.GaugeTimeline([], C.defaultRange(), false); tl.frames = [];
+      worker = new Worker('worker.js?v=20261121ng0'); tl = new C.GaugeTimeline([], C.defaultRange(), false); tl.frames = [];
       worker.onmessage = (e) => { const m = e.data; if (m.type === 'liveFrames' && m.gen === my && running) tl.append(m.frames.map(([hz, register]) => ({ hz, register }))); };
       worker.postMessage({ type: 'liveStart', rate: ctx.sampleRate, personal: samples.personal() });
       src = ctx.createMediaStreamSource(stream);
       const sink = ctx.createGain(); sink.gain.value = 0; sink.connect(ctx.destination);
       const send = (buf) => { if (running && my === gen) worker.postMessage({ type: 'livePush', samples: buf, gen: my }, [buf.buffer]); };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261121head');
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261121ng0');
         if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => send(e.data);
@@ -860,7 +860,7 @@ const live = (() => {
 })();
 
 // ======================= サンプル音声を追加（録音シート） =======================
-// 「地声を録る」「ミックスを録る」「裏声を録る」「裏声ミックスを録る」: マイク音声はこの端末のメモリだけで特徴量に変換し、
+// 「地声を録る」「ミックスを録る」「裏声を録る」「ミックス（裏声寄り）を録る」: マイク音声はこの端末のメモリだけで特徴量に変換し、
 // 特徴量だけを localStorage に保存する（音声は保存しない・どこにも送らない）。結果は押した行の「開始」のすぐ下に出す。
 // 「録音してそのまま素材分析する」は従来どおり WAV にして素材分析（file.choose）へ渡す（保存・送信なし）。
 const rec = (() => {
@@ -928,7 +928,7 @@ const rec = (() => {
   $('smpApply').onchange = onToggle; $('smpApplyMain').onchange = onToggle;
   $('smpReset').onclick = () => {
     if (phase !== 'idle') return;
-    if (!window.confirm('録ったサンプル音声（地声・ミックス・裏声・裏声ミックス）をすべて削除して、既定の判定基準に戻しますか？')) return;
+    if (!window.confirm('録ったサンプル音声（地声・ミックス・ミックス（裏声寄り）・裏声）をすべて削除して、既定の判定基準に戻しますか？')) return;
     samples.clear(); for (const k in results) delete results[k]; render(); msg('初期設定に戻しました。判定はいつもの既定の基準です。');
   };
   function ui() {
@@ -1014,7 +1014,7 @@ const rec = (() => {
         $('recLevelBar').style.width = Math.min(100, Math.round(Math.sqrt(peak) * 140)) + '%';
         if (phase === 'rec') { chunks.push(buf); got += buf.length; if (got >= limit * ctx.sampleRate) finish(); } };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261121head'); if (my !== gen) return;
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261121ng0'); if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => onChunk(e.data);
       } else { node = ctx.createScriptProcessor(2048, 1, 1); node.onaudioprocess = (e) => onChunk(new Float32Array(e.inputBuffer.getChannelData(0))); }
@@ -1171,7 +1171,7 @@ const col = (() => {
         $('colLevelBar').style.width = Math.min(100, Math.round(Math.sqrt(peak) * 140)) + '%';
         if (phase === 'rec') { chunks.push(buf); got += buf.length; if (got >= SECONDS * ctx.sampleRate) { got = SECONDS * ctx.sampleRate; finish(); } } };
       if (ctx.audioWorklet && window.AudioWorkletNode) {
-        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261121head'); if (my !== gen) return;
+        await ctx.audioWorklet.addModule('capture-worklet.js?v=20261121ng0'); if (my !== gen) return;
         node = new AudioWorkletNode(ctx, 'pm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => onChunk(e.data);
       } else { node = ctx.createScriptProcessor(2048, 1, 1); node.onaudioprocess = (e) => onChunk(new Float32Array(e.inputBuffer.getChannelData(0))); }

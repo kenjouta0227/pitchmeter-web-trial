@@ -120,17 +120,22 @@ const RC = {
   //  ① q が uraP 以上（声が出ている所）→ 裏声で固定（ミックスに置き換えない）。一度 裏声 になったら q が uraP−offHyst を下回るまで 裏声。
   //  ② q が vetoP 以下＝はっきり地声 で、同じ音の中に今までの基準でも地声らしいフレームがある（noteChest）（または q が vetoHard 以下＝とてもはっきり地声）→ 今までの判定が 裏声 でも 地声。ミックス系（ミックス・裏声orミックス）は今までの基準のまま。
   //  ③ その間 → 今までの判定のまま（ほかの歌手の裏声を弱くしないため）。AIが読み込めない時も今までの判定のまま。
-  soundModel: { uraP: 0.9, vetoP: 0.02, vetoHard: 0.003, offHyst: 0.1, halfWin: 0.2, liveBack: 0.45 },
-  // 2026-11-21 けんじょうさん指示（通話）: 裏声を2つに分ける。息が多くて薄い完全なファルセット → 裏声（2）、芯があって密度の高いヘッドボイス（裏声寄りのミックス）→ 裏声ミックス（4）。
+  soundModel: { uraP: 0.9, vetoP: 0.02, vetoHard: 0.003, offHyst: 0.1, halfWin: 0.2, liveBack: 0.45, vetoHardAge: 0.3 }, // vetoHardAge: 2026-11-21 リアルタイムで 始まって vetoHardAge 秒未満の音は q だけ（vetoHard）では地声にしない（窓に前の音が混ざる。禁止項目「裏声→地声」）
+  // 2026-11-21 けんじょうさん指示（通話）: 裏声を2つに分ける。息が多くて薄い完全なファルセット → 裏声（2）、芯があって密度の高いヘッドボイス（裏声寄りのミックス）→ ヘッドボイス（4、表示は「ミックス」）。
   //  裏声と決まった所（AIの裏声・今までの判定の裏声）で、前後 halfWin 秒のうち 声が出ているフレームの frac 以上が「芯がある」（倍音が豊か hrich 以上・2倍音が強い h1h2 以下・
-  //  響きがはっきり cpp 以上・息のノイズが少ない breath 以下）か、AIの裏声らしさ q が headQ 未満（AIは完全なファルセットと聞いていない）なら 裏声ミックス。
-  headSplit: { headQ: 0.5, hrich: 8, h1h2: -3, cpp: 3.4, breath: -35, halfWin: 0.25, frac: 0.5 },
-  // 2026-11-21 けんじょうさん指示: メーターの針が真ん中（ミックス）より右で「裏声」と出る所は 全部「裏声ミックス」と表示（リアルタイム・再生・書き出し 共通、GaugeTimeline）。
+  //  響きがはっきり cpp 以上・息のノイズが少ない breath 以下）か、AIの裏声らしさ q が headQ 未満（AIは完全なファルセットと聞いていない）なら ヘッドボイス。
+  //  2026-11-21 けんじょうさん回答A: 迷う所だけ「裏声orミックス」（5）。芯が frac 以上 → 4（表示「ミックス」）。芯がはっきりしない時は AIの裏声らしさ q で:
+  //   q < headQ（AIははっきり裏声ではない: 地声・ミックスの取り違え、9秒の所）→ 4（「ミックス」）／ headQ ≤ q < orQ（AIが中間＝迷う）→ 5（「裏声orミックス」）／ q ≥ orQ → 裏声（2）。
+  //   さらに 針が真ん中より右で q < soundModel.uraP の 裏声 は uraRight で 5（「裏声orミックス」）。完全なファルセット（q ≥ uraP）は 裏声 のまま。
+  headSplit: { headQ: 0.1, orQ: 0.5, hrich: 8, h1h2: -3, cpp: 3.4, breath: -35, halfWin: 0.25, frac: 0.5, sureKeep: true, sureBack: 0.6, sureFrac: 0.5, onsetSec: 0.3, onsetGap: 0.3 },
+  //  2026-11-21 けんじょうさん指示「禁止の4項目（ファルセット→ミックス など）を0コマに」: sureKeep = AIがはっきり完全なファルセット（q ≥ soundModel.uraP）と聞いていて、芯が一瞬だけ（前 sureBack 秒から今までで 芯のあるフレームが sureFrac 未満）の所は「ミックス」にしない。ずっと芯がある（ミックス３など）は今までどおり「ミックス」。
+  //   onsetSec = 無音のあと onsetSec 秒以内（AIの窓の半分 0.25 秒より長い onsetGap 秒以上 声が切れた後の 出だし）は、AIの窓に無音が混ざって q が低く出るので、q だけで「ミックス」にしない（今までの判定の 裏声 のまま）。
+  // 2026-11-21 けんじょうさん指示: メーターの針が真ん中（ミックス）より右で「裏声」と出る所は コード4（表示「ミックス」）。完全なファルセット（keepSure）は 裏声 のまま（リアルタイム・再生・書き出し 共通、GaugeTimeline）。
   //  minPos: 針の位置（0〜1、0.5 が真ん中）。mode 'all' = 全部 / 'keepSure' = AIがはっきり裏声（q ≥ soundModel.uraP）で芯のない所は 裏声 のまま。
   uraRight: { on: true, minPos: 0.5, mode: 'keepSure' }, // 2026-11-21 けんじょうさん回答: 完全なファルセットだけ右側でも「裏声」
   noteChest: { semis: 1.5, gapFrames: 13, frac: 0.15, minChest: 3 }, // 2026-11-21 同じ音の中に 地声らしいフレームが frac 以上（minChest 以上）
   cppFmax: 8000.0, cppBins: 512, cppFloorDb: 80.0, breathLoHz: 1000.0,
-  // 2026-11-17 裏声ミックス / 息漏れ: see Smoother.push
+  // 2026-11-17 uraMix / 息漏れ: see Smoother.push
   pHead: 0.85, breathyDb: -30.0, cleanDb: -38.0, relaxedYinThreshold: 0.35, relaxedBreathMin: -30.0, relaxedBreathMax: -6.0,
   gateMinRmsDbfs: -50.0, gateMaxAperiodicity: 0.20, gateMinF0: 387.0, gateMaxF0: 1000.0,
   medianFrames: 17, pFalsetto: 0.70, pMix: 0.35, stableFrames: 6, minValidFraction: 0.5,
@@ -143,7 +148,7 @@ const RC = {
   defaultMix: true,
   // 2026-11-20 「裏声orミックス」（既定の判定だけ）: 窓の p(裏声) の中央値が 0.45〜0.50（ミックスと裏声の境目）なら 裏声orミックス。
   //  息漏れ（breathyDb 以上）の所は 裏声 寄り: 裏声はそのまま、裏声orミックスになる所も 裏声。42区間＋けんじょうさんの6サンプルで選んだ。
-  uraOrMix: { lo: 0.45, hi: 0.50, keepBreathy: true, breathyUra: true }, // 2026-11-20 hi は pFalsetto に合わせて 0.50
+  uraOrMix: { lo: 0.47, hi: 0.50, keepBreathy: true, breathyUra: true }, // 2026-11-20 hi は pFalsetto に合わせて 0.50
   // 2026-11-20 既定の 地声（けんじょうさん C案）: 地声テイク31本＋ラベルの地声区間（300 Hz 以上のフレーム）の平均と共分散の逆行列（数字だけ）。
   //  ミックスの基準（ミックス区間＋ミックス1〜3）も持ち、地声の基準からの距離が cutoff 以下かつ ミックスの基準の mixRatio 倍以下の所だけ 地声。
   //  cutoff・mixRatio・holdFrac は歌手を1人ずつ抜いた確認（LOSO）で選んだ。
@@ -162,10 +167,10 @@ const RC = {
   labelRef: { bias: 3.460066776914001, weightHrich: -0.1391899095963697, weightCpp: -0.6025507640698841, weightH1H2: 0, pFalsetto: 0.50, pMix: 0.45, pHead: 0.50, mixFloorHz: 0 }, // 2026-11-20 裏声を最優先（けんじょうさん）: pFalsetto・pHead 0.60→0.50（0.45 以下は 地声テイク chest_010 が崩れる） // 2026-11-20 ミックスの下限（430 Hz 以上だけミックス＝「そう」の決まり）は削除
 };
 const REG = { none: 0, mix: 1, falsetto: 2, chest: 3, uraMix: 4, uraOrMix: 5 };
-const REG_LABEL = { 0: null, 1: 'ミックス', 2: '裏声', 3: '地声', 4: '裏声ミックス', 5: '裏声orミックス' }; // 2026-11-21 けんじょうさん指示（通話）: 4 はヘッドボイス用に「裏声ミックス」。5（ミックス側の境目）は「裏声orミックス」のまま。 // 2026-11-20 けんじょうさん指示: 裏声ミックス(4)も表示は「裏声orミックス」。判定(コード4/5)はそのまま
+const REG_LABEL = { 0: null, 1: 'ミックス', 2: '裏声', 3: '地声', 4: 'ミックス', 5: '裏声orミックス' }; // 2026-11-21 けんじょうさん指示（通話）: 表示は4つ「地声」「ミックス」「裏声」「裏声orミックス（本当に迷う境目だけ）」。4（芯のあるヘッドボイス）は「ミックス」。判定のコードは変えない。
 // 2026-11-19（けんじょうさん指示「割合が裏声が多い時は全部ミックスってポインターに出して」）:
-// 裏声寄りの判定（裏声・裏声ミックス）は、表示ではすべて「ミックス」にする。判定そのもの（frames の register）は変えない。
-// 2026-11-20 けんじょうさん指示で元に戻した: 裏声は裏声、裏声ミックスは裏声ミックスのまま表示する。
+// 裏声寄りの判定（裏声・uraMix）は、表示ではすべて「ミックス」にする。判定そのもの（frames の register）は変えない。
+// 2026-11-20 けんじょうさん指示で元に戻した: 裏声は裏声、uraMixはuraMixのまま表示する。
 function displayRegister(r) { return r; } // 3 (地声) is only produced with a personal calibration that includes 地声
 
 class RegisterClassifier {
@@ -337,17 +342,24 @@ function headDense(f) {
   const H = RC.headSplit; if (!H || !(f.f0 > 0) || !RegisterClassifier.hasHarmonics(f)) return -1;
   return f.hrichDb >= H.hrich && isFinite(f.h1h2) && f.h1h2 <= H.h1h2 && f.cpp8k >= H.cpp && !(isFinite(f.breathDb) && f.breathDb > H.breath) ? 1 : 0;
 }
-/** 2026-11-21 裏声（2）を 完全なファルセット（2）とヘッドボイス＝裏声ミックス（4）に分ける。dense[lo..hi] は headDense、q は AIの裏声らしさ（無ければ NaN）。 */
-function headSplitRegister(reg, dense, lo, hi, q) {
+/** 2026-11-21 裏声（2）を 完全なファルセット（2）とヘッドボイス（4）に分ける。dense[lo..hi] は headDense、q は AIの裏声らしさ（無ければ NaN）。 */
+function headSplitRegister(reg, dense, lo, hi, q, onsetAge, hop) {
   const H = RC.headSplit; if (!H || reg !== REG.falsetto) return reg;
-  if (isFinite(q) && q < H.headQ) return REG.uraMix;
+  if (H.sureKeep && isFinite(q) && RC.soundModel && q >= RC.soundModel.uraP && hop > 0) { // AIがはっきり完全なファルセットで 芯は一瞬だけ → 裏声 のまま
+    let n = 0, d = 0; for (let i = Math.max(0, lo - Math.round(H.sureBack / hop)); i <= Math.min(dense.length - 1, hi); i++) if (dense[i] >= 0) { n++; if (dense[i] > 0) d++; }
+    if (n > 0 && d < H.sureFrac * n) return reg;
+  }
+  if (H.onsetSec && onsetAge < H.onsetSec) return reg; // 無音のあとの出だし: AIの窓に無音が混ざり 芯の判定もフレームが少ないので、今までの判定の 裏声 のまま
   let n = 0, d = 0; for (let i = Math.max(0, lo); i <= Math.min(dense.length - 1, hi); i++) if (dense[i] >= 0) { n++; if (dense[i] > 0) d++; }
-  return n > 0 && d >= H.frac * n ? REG.uraMix : reg;
+  if (n > 0 && d >= H.frac * n) return REG.uraMix; // 芯のあるヘッドボイス →「ミックス」
+  if (isFinite(q) && q < H.headQ) return REG.uraMix; // AIははっきり裏声ではない →「ミックス」
+  if (isFinite(q) && q < H.orQ) return REG.uraOrMix; // AIが中間で 芯もはっきりしない → 迷う所「裏声orミックス」
+  return reg;
 }
-/** 2026-11-21 表示: 針が真ん中より右の「裏声」は「裏声ミックス」（RC.uraRight）。sure = AIがはっきり裏声で芯のない所（mode 'keepSure' の時だけ使う）。 */
+/** 2026-11-21 表示: 針が真ん中より右の「裏声」は コード4＝表示「ミックス」（RC.uraRight）。sure = AIがはっきり裏声で芯のない所（mode 'keepSure' の時だけ使う）。 */
 function uraRightRegister(reg, position, sure) {
   const U = RC.uraRight; if (!U || !U.on || reg !== REG.falsetto || !(position >= U.minPos)) return reg;
-  return U.mode === 'keepSure' && sure ? reg : REG.uraMix;
+  return U.mode === 'keepSure' && sure ? reg : REG.uraOrMix; // 2026-11-21 右側: 完全なファルセットは 裏声、はっきりしない裏声は 迷う所「裏声orミックス」（芯のある所・AIがはっきり裏声でない所は headSplit で もう「ミックス」）
 }
 /** 2026-11-21 音で聞き分けるAIの結果（track: { hop, t0, p: 窓の中心ごとの 裏声らしさ }）。t の前後 halfWin 秒の中央値。無ければ NaN。 */
 function soundQ(track, t) {
@@ -361,6 +373,11 @@ function soundQ(track, t) {
   return v.length % 2 ? v[v.length >> 1] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2;
 }
 /** 2026-11-21 2段階: AIで 地声か裏声か → 裏声はそのまま固定、地声側だけ今までの基準（ミックス・裏声orミックス）。st = { ura } を前の状態として持ち回る。 */
+/** 2026-11-21 声の出だしからの秒数（onsetGap 秒以上 切れた後を 出だしとする）。 */
+function onsetTrack(o, t, voiced) {
+  if (!voiced) return t - o.on; const gap = RC.headSplit && RC.headSplit.onsetGap || 0.1;
+  if (t - o.last > gap) o.on = t; o.last = t; return t - o.on;
+}
 function soundRegister(state, q, voiced, st, noteChest, stale) {
   const SM = RC.soundModel;
   if (!SM || !isFinite(q)) { st.ura = false; return state; }
@@ -426,10 +443,10 @@ function medianFallback(pitch, lo, hi) {
 /** Display smoothing over 17 frames (~0.2 s), switches after 6 identical candidates.
  *  Frame values: p(裏声) 0…1, CAL.CHEST (地声 frame, personal only), CAL.BREATHY (relaxed-gate breathy frame: votes 裏声 only), or null.
  *  Thresholds T = personal calibration or the defaults in RC:
- *   median p ≥ pF → 裏声, ≤ pM → ミックス, between → 裏声ミックス (2026-11-17; was: no judgment)
- *   息漏れ (median breathDb of the window): 裏声ミックス in the 裏声-side half of the zone (m ≥ (pF+pM)/2) with breath ≥ breathyDb → 裏声;
- *     裏声 with p < pHead (just above pF) and breath ≤ cleanDb (little breath) → 裏声ミックス
- *   ミックス / 裏声ミックス are not shown below mixFloorHz; a breathy relaxed frame can never yield ミックス / 裏声ミックス. */
+ *   median p ≥ pF → 裏声, ≤ pM → ミックス, between → uraMix (2026-11-17; was: no judgment)
+ *   息漏れ (median breathDb of the window): uraMix in the 裏声-side half of the zone (m ≥ (pF+pM)/2) with breath ≥ breathyDb → 裏声;
+ *     裏声 with p < pHead (just above pF) and breath ≤ cleanDb (little breath) → uraMix
+ *   ミックス / uraMix are not shown below mixFloorHz; a breathy relaxed frame can never yield ミックス / uraMix. */
 class Smoother {
   constructor(personal) { this.history = []; this.bhist = []; this.candidate = REG.none; this.count = 0; this.state = REG.none; this.T = thresholdsOf(personal); this.personal = !!personal; this.falsettoOn = !!personal || RC.defaultFalsetto; this.mixOn = !!personal || RC.defaultMix; }
   push(p, f0, breath, relaxedF0) {
@@ -463,7 +480,7 @@ class Smoother {
           if ((c === REG.mix || c === REG.uraMix) && !(f0 > 0)) c = REG.none;
           // 2026-11-20 「裏声orミックス」: 既定の判定（サンプル音声なし）で、裏声とミックスの境目に近い所（窓の p(裏声) の中央値が U.lo〜U.hi）。
           //  判定の閾値は変えない。息漏れ（breathyDb 以上）の裏声はそのまま 裏声。
-          // 2026-11-20 既定の 地声: 窓の中に 地声に近いフレームが holdFrac 以上ある間は、ミックス系（ミックス・裏声ミックス・裏声orミックス）を出さない（判定なし）。
+          // 2026-11-20 既定の 地声: 窓の中に 地声に近いフレームが holdFrac 以上ある間は、ミックス系（ミックス・uraMix・裏声orミックス）を出さない（判定なし）。
           const H = RC.chestRef;
           if (H && H.holdFrac && !this.personal && chestN >= H.holdFrac * vals.length && (c === REG.mix || c === REG.uraMix)) c = REG.none;
           const U = RC.uraOrMix;
@@ -532,7 +549,7 @@ function frameValue(P, f) {
   return personalValue(P, f);
 }
 
-// ---------------- Personal calibration (「地声を録る」「ミックスを録る」「裏声ミックスを録る」「裏声を録る」) ----------------
+// ---------------- Personal calibration (「地声を録る」「ミックスを録る」「ミックス（裏声寄り）を録る」「裏声を録る」) ----------------
 // Recordings are reduced on the device to per-frame features [f0 Hz, hrichDb, cpp8k, breathDb, targetHz]; no raw audio is kept.
 const CAL = {
   // enabled (2026-11-17): app.js passes buildCalibration(samples) only when samples exist AND 「サンプル音声を適用」 is on;
@@ -598,8 +615,8 @@ function fitLogistic(ura, mix, theta0) {
 }
 const noteKey = (r) => Math.round(12 * log2((r[4] || r[0]) / 440)); // semitone index of the guide note (or of f0)
 /** Personal classifier parameters from the stored samples ({chest, mix, uramix, ura}: {frames}). null when nothing is registered.
- *  Order on the 裏声-logit axis z: 裏声 (high) > 裏声ミックス > ミックス (low). Frames are mapped per pitch so that
- *  the 裏声|裏声ミックス edge lands on p = pFalsetto and the 裏声ミックス|ミックス edge on p = pMix (see personalValue). */
+ *  Order on the 裏声-logit axis z: 裏声 (high) > uraMix > ミックス (low). Frames are mapped per pitch so that
+ *  the 裏声|uraMix edge lands on p = pFalsetto and the uraMix|ミックス edge on p = pMix (see personalValue). */
 function buildCalibration(samples) {
   samples = samples || {};
   const fr = (k) => (samples[k] && samples[k].frames && samples[k].frames.length) ? samples[k].frames : null;
@@ -622,10 +639,10 @@ function buildCalibration(samples) {
   // ---- edges on the z axis (global, then per guide note) ----
   const zOf = (F) => zs(F, th), med = (a) => quantile(a, 0.5);
   // Edges between recorded categories sit in the gap between their tails (2 % / 98 %), so each recording keeps its own
-  // label; 裏声ミックス stays the narrow, ambiguous zone (「あいまいなところだけ」): without a 裏声ミックス recording it is the
+  // label; uraMix stays the narrow, ambiguous zone (「あいまいなところだけ」): without a uraMix recording it is the
   // middle third of the 裏声|ミックス gap, with one its ミックス-side edge stays near that recording's low tail.
   const tLo = (a) => quantile(a, CAL.tailLow), tHi = (a) => quantile(a, CAL.tailHigh);
-  const edgesFor = (u, h, m) => { // u/h/m: z arrays (or null) of 裏声 / 裏声ミックス / ミックス
+  const edgesFor = (u, h, m) => { // u/h/m: z arrays (or null) of 裏声 / uraMix / ミックス
     let up = Lf, lo = Lm;
     if (h) {
       const mh = med(h);
@@ -651,18 +668,18 @@ function buildCalibration(samples) {
       const g = by[n], ok = (k) => g[k].length >= CAL.minNoteFrames ? zOf(g[k]) : null, u = ok('ura'), h = ok('uramix'), m = ok('mix');
       if ([u, h, m].filter(Boolean).length < 2 || !order(h, u, m)) continue;
       let [up, lo] = edgesFor(u, h, m);
-      if (!h) { /* no 裏声ミックス on this note: keep the global band width around this note's 裏声|ミックス centre */ }
+      if (!h) { /* no uraMix on this note: keep the global band width around this note's 裏声|ミックス centre */ }
       if (!u && h) up = Math.max(up, gUp); if (!m && h) lo = Math.min(lo, gLo);
       table.push([log2(440 * Math.pow(2, n / 12)), up, lo]);
     } }
-  // ---- 息漏れ split (裏声 vs 裏声ミックス recordings) ----
+  // ---- 息漏れ split (裏声 vs uraMix recordings) ----
   let breathyDb = RC.breathyDb, cleanDb = RC.cleanDb;
   const bmed = (F) => { const b = F.map(r => r[3]).filter(v => v !== null && isFinite(v)); return b.length ? med(b) : NaN; };
   let split = false;
   if (U && H) { const bu = bmed(U), bh = bmed(H); if (bu - bh >= CAL.breathSplitMinDb) { const t = Math.min(CAL.splitMaxDb, Math.max(CAL.splitMinDb, (bu + bh) / 2));
       // a recorded ミックス as breathy as the threshold would be pushed to 裏声 by it: then breath does not separate this voice
       if (!(M && bmed(M) >= t - CAL.breathSplitMinDb / 2)) { breathyDb = t; cleanDb = t; split = true; } } }
-  const pHead = U ? RC.pFalsetto : RC.pHead; // a recorded 裏声 is 裏声: no 'clean → 裏声ミックス' nudge on top of it
+  const pHead = U ? RC.pFalsetto : RC.pHead; // a recorded 裏声 is 裏声: no 'clean → uraMix' nudge on top of it
   // ---- pitch floors: lowered to the lowest recorded pitch only when 地声 is recorded too ----
   const floorOf = (F) => CAL.floorRatio * quantile(F.map(r => r[0]), CAL.floorQuantile);
   const nonChest = [...(U || []), ...(H || []), ...(M || [])], mixLike = [...(M || []), ...(H || [])];
@@ -721,7 +738,7 @@ function attachRegister(frames, mono44100, onProgress, personal, sound) {
   const P = personal || null, cl = new RegisterClassifier(44100, classifierOpts(P));
   const track = cl.analyze(mono44100, { onProgress, personal: P });
   if (!track.frameCenters.length) return frames;
-  const first = track.frameCenters[0], hopS = cl.hop / cl.sampleRate, pc = new PitchContinuity(), sst = {};
+  const first = track.frameCenters[0], hopS = cl.hop / cl.sampleRate, pc = new PitchContinuity(), sst = {}, ons = { last: -99, on: -99 };
   return frames.map(f => {
     const g = Object.assign({}, f);
     const c = track.frameCenters, lo = Math.max(0, Math.ceil((f.seconds - RC.fallbackHalfWindowSeconds - first) / hopS - 1e-9)), hi = Math.min(c.length - 1, Math.floor((f.seconds + RC.fallbackHalfWindowSeconds - first) / hopS + 1e-9));
@@ -729,10 +746,11 @@ function attachRegister(frames, mono44100, onProgress, personal, sound) {
     else { const h2 = octaveFixedHz(f.hz, track.octs, lo, hi); if (h2 > 0) { g.hz = h2; g.octaveFixed = true; } }
     { const h3 = pc.push(g.hz, cfMedian(track.f0s, lo, hi), !!g.octaveFixed); if (h3 !== g.hz) { g.hz = h3; g.continuityFixed = true; } }
     g.register = RegisterClassifier.stateAt(track, f.seconds, hopS, first);
+    const onsetAge = onsetTrack(ons, f.seconds, g.hz > 0);
     const q = sound ? soundQ(sound, f.seconds) : NaN;
     if (sound) g.register = soundRegister(g.register, q, g.hz > 0, sst, f.seconds >= first && track.nch[Math.min(track.nch.length - 1, Math.floor((f.seconds - first) / hopS + 1e-9))]);
     if (g.register === REG.falsetto && RC.headSplit) { const hw = RC.headSplit.halfWin, a = Math.ceil((f.seconds - hw - first) / hopS - 1e-9), b = Math.floor((f.seconds + RC.fallbackHalfWindowSeconds - first) / hopS + 1e-9); // リアルタイムと同じ: 前 halfWin 秒〜少し先
-      g.register = headSplitRegister(g.register, track.dense, a, b, q); if (g.register === REG.falsetto) g.uraSure = isFinite(q) && RC.soundModel && q >= RC.soundModel.uraP; }
+      g.register = headSplitRegister(g.register, track.dense, a, b, q, onsetAge, hopS); if (g.register === REG.falsetto) g.uraSure = isFinite(q) && RC.soundModel && q >= RC.soundModel.uraP; }
     return g;
   });
 }
@@ -759,7 +777,7 @@ class LivePitchStream {
     this.cl = this.cl || new RegisterClassifier(44100, classifierOpts(this.P));
     this.pcm16 = new Float32Array(0); this.base16 = 0; this.nextCenter = 0;
     this.pcm44 = new Float64Array(0); this.base44 = 0; this.nextStart = 0; this.total44 = 0;
-    this.sm = new Smoother(this.P); this.states = []; this.nch = []; this.nage = []; this.dense = []; this.cands = []; this.octs = []; this.f0s = []; this.pc = new PitchContinuity(); this.pending = []; this.emitted = 0; this.sound = null; this.sst = {};
+    this.sm = new Smoother(this.P); this.states = []; this.nch = []; this.nage = []; this.dense = []; this.cands = []; this.octs = []; this.f0s = []; this.pc = new PitchContinuity(); this.ons = { last: -99, on: -99 }; this.pending = []; this.emitted = 0; this.sound = null; this.sst = {};
   }
   /** 2026-11-21 音で聞き分けるAIの結果を足す（窓の中心 center 秒、裏声らしさ p）。worker が順番に入れる。 */
   addSound(center, p, hop) { if (!this.sound) this.sound = { t0: center, hop: hop || 0.1, p: [], live: true }; const i = Math.round((center - this.sound.t0) / this.sound.hop); while (this.sound.p.length < i) this.sound.p.push(NaN); if (i >= 0) this.sound.p[i] = p; }
@@ -828,14 +846,16 @@ class LivePitchStream {
       const hi = Math.min(this.states.length - 1, Math.floor((f.seconds + RC.fallbackHalfWindowSeconds - first) / hop + 1e-9));
       const h3 = this.pc.push(g.hz, cfMedian(this.f0s, lo, hi), !!g.octaveFixed); if (h3 !== g.hz) { g.hz = h3; g.continuityFixed = true; }
     }
+    const onsetAge = onsetTrack(this.ons, f.seconds, g.hz > 0);
     if (f.seconds >= this.firstCenter) g.register = this.states[Math.min(this.states.length - 1, Math.floor((f.seconds - this.firstCenter) / this.stateHop + 1e-9))];
     if (this.sound) { // 少し前の窓（stale）は、同じ音がその窓の時刻から続いている時だけ使う（前の音の地声で 次の音の裏声を消さない）
       const q = soundQ(this.sound, f.seconds), si = f.seconds >= this.firstCenter ? Math.min(this.nch.length - 1, Math.floor((f.seconds - this.firstCenter) / this.stateHop + 1e-9)) : -1;
       const sameNote = si >= 0 && this.nage[si] * this.stateHop >= f.seconds - (soundQ.staleFrom - 0.25);
-      g.register = soundRegister(g.register, q, g.hz > 0, this.sst, si >= 0 && this.nch[si], soundQ.stale && !sameNote); g.q = q; }
+      const young = RC.soundModel && RC.soundModel.vetoHardAge > 0 && !(si >= 0 && this.nage[si] * this.stateHop >= RC.soundModel.vetoHardAge); // 2026-11-21 リアルタイム: 始まったばかりの音は AIの窓に前の音が混ざるので、q だけ（vetoHard）では 地声にしない（同じ音の地声らしさ noteChest は要る）
+      g.register = soundRegister(g.register, q, g.hz > 0, this.sst, si >= 0 && this.nch[si], (soundQ.stale && !sameNote) || young); g.q = q; }
     if (g.register === REG.falsetto && RC.headSplit && f.seconds >= this.firstCenter) { // リアルタイム: 前 halfWin 秒〜少し先（ファイル解析と同じ窓）
       const q = this.sound ? g.q : NaN, a = Math.ceil((f.seconds - RC.headSplit.halfWin - this.firstCenter) / this.stateHop - 1e-9), b = Math.min(this.states.length - 1, Math.floor((f.seconds + RC.fallbackHalfWindowSeconds - this.firstCenter) / this.stateHop + 1e-9));
-      g.register = headSplitRegister(g.register, this.dense, a, b, q); if (g.register === REG.falsetto) g.uraSure = isFinite(q) && q >= RC.soundModel.uraP; }
+      g.register = headSplitRegister(g.register, this.dense, a, b, q, onsetAge, this.stateHop); if (g.register === REG.falsetto) g.uraSure = isFinite(q) && q >= RC.soundModel.uraP; }
     delete g.q;
     return g;
   }
@@ -881,7 +901,7 @@ const BandRule = {
   targets(register, judgmentVisible, position, vertical) {
     if (!judgmentVisible) return { chest: 1, mix: 1, ura: 1 };
     const at = BandRule.labelPositions(vertical);
-    // 2026-11-17 23:13: 地声・裏声・ミックス・裏声ミックスのどの判定中も、固定表示（地声・ミックス・裏声）をすべて消す。判定が外れたら元に戻る
+    // 2026-11-17 23:13: 地声・裏声・ミックス・uraMixのどの判定中も、固定表示（地声・ミックス・裏声）をすべて消す。判定が外れたら元に戻る
     if (register === REG.falsetto || register === REG.mix || register === REG.uraMix || register === REG.uraOrMix || register === REG.chest) return { chest: 0, mix: 0, ura: 0 };
     return { chest: 1, mix: 1, ura: 1 };
   },
@@ -913,7 +933,7 @@ class GaugeTimeline {
     const fade = Math.min(1, Math.max(0, (t - this.readoutTime) / 0.8));
     const range = this.range;
     const midi = this.valid ? this.value(t) : (range.low + range.high) / 2, readoutAlpha = this.readoutHz > 0 ? 1 - fade * fade * (3 - 2 * fade) : 0;
-    const shown = uraRightRegister(this.readoutRegister, BandRule.position(midi, range), this.readoutSure); // 2026-11-21 針が真ん中より右の 裏声 → 裏声ミックス
+    const shown = uraRightRegister(this.readoutRegister, BandRule.position(midi, range), this.readoutSure); // 2026-11-21 針が真ん中より右の 完全なファルセットでない裏声 → コード4（表示「ミックス」）
     const band = BandRule.targets(shown, readoutAlpha > 0.01, BandRule.position(midi, range), this.vertical);
     const d = dt !== undefined ? dt : 1 / 30;
     this.chestBand = BandRule.fade(this.chestBand, band.chest, d); this.mixBand = BandRule.fade(this.mixBand, band.mix, d); this.uraBand = BandRule.fade(this.uraBand, band.ura, d);
