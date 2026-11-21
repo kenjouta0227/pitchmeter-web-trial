@@ -127,7 +127,8 @@ const RC = {
   //  2026-11-21 けんじょうさん回答A: 迷う所だけ「裏声orミックス」（5）。芯が frac 以上 → 4（表示「ミックス」）。芯がはっきりしない時は AIの裏声らしさ q で:
   //   q < headQ（AIははっきり裏声ではない: 地声・ミックスの取り違え、9秒の所）→ 4（「ミックス」）／ headQ ≤ q < orQ（AIが中間＝迷う）→ 5（「裏声orミックス」）／ q ≥ orQ → 裏声（2）。
   //   さらに 針が真ん中より右で q < soundModel.uraP の 裏声 は uraRight で 5（「裏声orミックス」）。完全なファルセット（q ≥ uraP）は 裏声 のまま。
-  headSplit: { headQ: 0.1, orQ: 0.5, hrich: 8, h1h2: -3, cpp: 3.4, breath: -35, halfWin: 0.25, frac: 0.5, sureKeep: true, sureBack: 0.6, sureFrac: 0.5, onsetSec: 0.3, onsetGap: 0.3, clearQ: 0.04, blipSec: 0.2, blipSemis: 1.5, denseRun: true, chestUp: true },
+  headSplit: { headQ: 0.1, orQ: 0.5, hrich: 8, h1h2: -3, cpp: 3.4, breath: -35, halfWin: 0.25, frac: 0.5, sureKeep: true, sureBack: 0.6, sureFrac: 0.5, onsetSec: 0.3, onsetGap: 0.3, clearQ: 0.04, blipSec: 0.2, blipSemis: 1.5, denseRun: true, chestUp: true, sure2: true, sure2P: 0.85 },
+  //  sure2: 2026-11-21 再生で 今までの判定が裏声・元の音のAIが uraP 以上・前後の窓（halfWin）に芯（dense）も地声のフレームも1つも無く・フレームの裏声確率の中央値が sure2P 以上 → はっきりした裏声「裏声」（歌声だけの音のAIが低くても）。
   //  denseRun: 2026-11-21 上に upSemis 半音以上 跳んで始まった音では、芯（dense）を数えるのは その音が始まってからのフレームだけ（跳ぶ前の別の音の芯で 短い裏声をミックスにしない）。blip は 地声 が挟まった時も同じ。
   //  chestUp: 再生で 今までの判定が地声のままでも、その瞬間の音が はっきり裏声の形（フレームの裏声確率 pHead 以上）で 元の音のAIも orQ 以上なら「裏声orミックス」（判定の遅れで 短い裏声が地声になるのを防ぐ）。
   //  upInside/upGap/upSemis（soundModel）: 2026-11-21 今までの判定が裏声でない所を AIだけで「裏声」にするのは、今の音（upGap 秒以上の無音か upSemis 半音以上の跳びで区切る）が始まって upInside 秒より後を中心にした AIの窓だけで決める。
@@ -769,7 +770,12 @@ function attachRegister(frames, mono44100, onProgress, personal, sound) {
     if (sound) g.register = soundRegister(g.register, q, g.hz > 0, sst, f.seconds >= first && track.nch[Math.min(track.nch.length - 1, Math.floor((f.seconds - first) / hopS + 1e-9))], false, q2, qUp, g.hz > 0 && rs === f.seconds, qUpN);
     if (g.register === REG.chest && RC.headSplit && RC.headSplit.chestUp && RC.soundModel && q2 >= RC.headSplit.orQ && f.seconds >= first) { const pf = track.probs[Math.max(0, Math.min(track.probs.length - 1, Math.round((f.seconds - first) / hopS)))]; if (pf >= RC.pHead && pf <= 1) g.register = REG.uraOrMix; }
     if (g.register === REG.falsetto && RC.headSplit) { const hw = RC.headSplit.halfWin, a = Math.ceil((f.seconds - hw - first) / hopS - 1e-9), b = Math.floor((f.seconds + RC.fallbackHalfWindowSeconds - first) / hopS + 1e-9); // リアルタイムと同じ: 前 halfWin 秒〜少し先
-      g.register = headSplitRegister(g.register, track.dense, a, b, q, onsetAge, hopS, q2, run.up ? Math.ceil((rs - first) / hopS - 1e-9) : NaN); if (g.register === REG.falsetto) g.uraSure = isFinite(q) && RC.soundModel && q >= RC.soundModel.uraP; }
+      let sure2 = false;
+      if (RC.headSplit.sure2 && RC.soundModel && q2 >= RC.soundModel.uraP) { let n = 0, d = 0, ch = 0; const ps = [];
+        for (let i = Math.max(0, a); i <= Math.min(track.dense.length - 1, b); i++) { if (track.dense[i] >= 0) { n++; if (track.dense[i] > 0) d++; } const pv = track.probs[i]; if (pv > 1) ch++; else if (pv >= 0 && pv <= 1) ps.push(pv); }
+        ps.sort((x, y) => x - y); sure2 = n > 0 && d === 0 && ch === 0 && ps.length > 0 && ps[ps.length >> 1] >= RC.headSplit.sure2P; }
+      if (sure2) g.uraSure = true;
+      else { g.register = headSplitRegister(g.register, track.dense, a, b, q, onsetAge, hopS, q2, run.up ? Math.ceil((rs - first) / hopS - 1e-9) : NaN); if (g.register === REG.falsetto) g.uraSure = isFinite(q) && RC.soundModel && q >= RC.soundModel.uraP; } }
     return g;
   });
   return blipFill(out);

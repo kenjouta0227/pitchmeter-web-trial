@@ -1,6 +1,6 @@
 /* Analysis worker: runs entirely on this device. Nothing is uploaded.
    process() = iOS LocalAudioPipeline.process (原音 / 歌声 / 歌声＋保守的補完, 出力音声 原音 / 歌声のみ / 伴奏のみ). */
-importScripts('core.js?v=20261121tl1', 'sep.js?v=20261121tl1', 'sound.js?v=20261121tl1');
+importScripts('core.js?v=20261121tl2', 'sep.js?v=20261121tl2', 'sound.js?v=20261121tl2');
 let live = null, sessions = null, ortReady = null, cancelled = false, ortLib = null, soundReady = null, soundSession = null, liveSound = null, soundChain = Promise.resolve(), soundBusy = 0;
 function loadOrtLib() {
   if (ortLib) return ortLib;
@@ -40,9 +40,9 @@ function loadOrt() {
   return ortReady;
 }
 const pack = (frames) => {
-  const n = frames.length, hz = new Float64Array(n), reg = new Uint8Array(n), fb = new Uint8Array(n);
-  frames.forEach((f, i) => { hz[i] = f.hz; reg[i] = f.register; fb[i] = f.fallback ? 1 : 0; });
-  return { hz, reg, fb };
+  const n = frames.length, hz = new Float64Array(n), reg = new Uint8Array(n), fb = new Uint8Array(n), su = new Uint8Array(n);
+  frames.forEach((f, i) => { hz[i] = f.hz; reg[i] = f.register; fb[i] = f.fallback ? 1 : 0; su[i] = f.uraSure ? 1 : 0; }); // su: 2026-11-21 はっきりした裏声（右側でも「裏声」のまま）を画面に渡す
+  return { hz, reg, fb, su };
 };
 self.onmessage = async (e) => {
   const m = e.data;
@@ -58,7 +58,7 @@ self.onmessage = async (e) => {
       if (!needSep) {
         const snd = await soundTrack(mono, prog(0.45, 0.7, '声の聞き分け'));
         const frames = C.attachRegister(original, mono, prog(0.7, 1, '解析'), m.personal || null, snd);
-        const p = pack(frames); self.postMessage({ type: 'result', id: m.id, ...p }, [p.hz.buffer, p.reg.buffer, p.fb.buffer]); return;
+        const p = pack(frames); self.postMessage({ type: 'result', id: m.id, ...p }, [p.hz.buffer, p.reg.buffer, p.fb.buffer, p.su.buffer]); return;
       }
       self.postMessage({ type: 'progress', value: 0.15, label: '分離モデル' });
       const ort = await loadOrt();
@@ -72,7 +72,7 @@ self.onmessage = async (e) => {
         if (snd && C.RC.soundModel && C.RC.soundModel.rawListen) { const raw = await soundTrack(mono, prog(0.85, 0.9, '声の聞き分け')); if (raw && raw.p.length === snd.p.length) snd.p2 = raw.p; } // 2026-11-21 元の音でも聞く（歌声の取り出しで裏声らしさが消えた所の確認）
         frames = C.attachRegister(m.analysis === 'vocal' ? vocal : S.conservativeFusion(vocal, original), sep.mono, prog(0.9, 1, '解析'), m.personal || null, snd);
       }
-      const p = pack(frames), tr = [p.hz.buffer, p.reg.buffer, p.fb.buffer];
+      const p = pack(frames), tr = [p.hz.buffer, p.reg.buffer, p.fb.buffer, p.su.buffer];
       const out = { type: 'result', id: m.id, ...p };
       if (sep.stereo) { out.stemL = sep.stereo[0]; out.stemR = sep.stereo[1]; tr.push(out.stemL.buffer, out.stemR.buffer); }
       self.postMessage(out, tr);
@@ -90,7 +90,7 @@ self.onmessage = async (e) => {
         }
       }
       const fr = live.push(m.samples);
-      if (fr.length) self.postMessage({ type: 'liveFrames', gen: m.gen, frames: fr.map(f => [f.hz, f.register]) });
+      if (fr.length) self.postMessage({ type: 'liveFrames', gen: m.gen, frames: fr.map(f => [f.hz, f.register, f.uraSure ? 1 : 0]) }); // 3つ目: 2026-11-21 はっきりした裏声（右側でも「裏声」）
     } else if (m.type === 'liveStop') { live = null; liveSound = null; }
   } catch (err) { self.postMessage({ type: 'error', message: String(err && err.message || err) }); }
 };
