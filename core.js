@@ -120,14 +120,22 @@ const RC = {
   //  ① q が uraP 以上（声が出ている所）→ 裏声で固定（ミックスに置き換えない）。一度 裏声 になったら q が uraP−offHyst を下回るまで 裏声。
   //  ② q が vetoP 以下＝はっきり地声 で、同じ音の中に今までの基準でも地声らしいフレームがある（noteChest）（または q が vetoHard 以下＝とてもはっきり地声）→ 今までの判定が 裏声 でも 地声。ミックス系（ミックス・裏声orミックス）は今までの基準のまま。
   //  ③ その間 → 今までの判定のまま（ほかの歌手の裏声を弱くしないため）。AIが読み込めない時も今までの判定のまま。
-  soundModel: { uraP: 0.9, vetoP: 0.02, vetoHard: 0.003, offHyst: 0.1, halfWin: 0.2, liveBack: 0.45, vetoHardAge: 0.3 }, // vetoHardAge: 2026-11-21 リアルタイムで 始まって vetoHardAge 秒未満の音は q だけ（vetoHard）では地声にしない（窓に前の音が混ざる。禁止項目「裏声→地声」）
+  soundModel: { uraP: 0.9, vetoP: 0.02, vetoHard: 0.003, offHyst: 0.1, halfWin: 0.2, liveBack: 0.45, vetoHardAge: 0.3, rawListen: true, upInside: 0.2, upGap: 0.05, upSemis: 0.8, upChestWin: 2 }, // vetoHardAge: 2026-11-21 リアルタイムで 始まって vetoHardAge 秒未満の音は q だけ（vetoHard）では地声にしない（窓に前の音が混ざる。禁止項目「裏声→地声」）
   // 2026-11-21 けんじょうさん指示（通話）: 裏声を2つに分ける。息が多くて薄い完全なファルセット → 裏声（2）、芯があって密度の高いヘッドボイス（裏声寄りのミックス）→ ヘッドボイス（4、表示は「ミックス」）。
   //  裏声と決まった所（AIの裏声・今までの判定の裏声）で、前後 halfWin 秒のうち 声が出ているフレームの frac 以上が「芯がある」（倍音が豊か hrich 以上・2倍音が強い h1h2 以下・
   //  響きがはっきり cpp 以上・息のノイズが少ない breath 以下）か、AIの裏声らしさ q が headQ 未満（AIは完全なファルセットと聞いていない）なら ヘッドボイス。
   //  2026-11-21 けんじょうさん回答A: 迷う所だけ「裏声orミックス」（5）。芯が frac 以上 → 4（表示「ミックス」）。芯がはっきりしない時は AIの裏声らしさ q で:
   //   q < headQ（AIははっきり裏声ではない: 地声・ミックスの取り違え、9秒の所）→ 4（「ミックス」）／ headQ ≤ q < orQ（AIが中間＝迷う）→ 5（「裏声orミックス」）／ q ≥ orQ → 裏声（2）。
   //   さらに 針が真ん中より右で q < soundModel.uraP の 裏声 は uraRight で 5（「裏声orミックス」）。完全なファルセット（q ≥ uraP）は 裏声 のまま。
-  headSplit: { headQ: 0.1, orQ: 0.5, hrich: 8, h1h2: -3, cpp: 3.4, breath: -35, halfWin: 0.25, frac: 0.5, sureKeep: true, sureBack: 0.6, sureFrac: 0.5, onsetSec: 0.3, onsetGap: 0.3 },
+  headSplit: { headQ: 0.1, orQ: 0.5, hrich: 8, h1h2: -3, cpp: 3.4, breath: -35, halfWin: 0.25, frac: 0.5, sureKeep: true, sureBack: 0.6, sureFrac: 0.5, onsetSec: 0.3, onsetGap: 0.3, clearQ: 0.04, blipSec: 0.2, blipSemis: 1.5, denseRun: true, chestUp: true },
+  //  denseRun: 2026-11-21 上に upSemis 半音以上 跳んで始まった音では、芯（dense）を数えるのは その音が始まってからのフレームだけ（跳ぶ前の別の音の芯で 短い裏声をミックスにしない）。blip は 地声 が挟まった時も同じ。
+  //  chestUp: 再生で 今までの判定が地声のままでも、その瞬間の音が はっきり裏声の形（フレームの裏声確率 pHead 以上）で 元の音のAIも orQ 以上なら「裏声orミックス」（判定の遅れで 短い裏声が地声になるのを防ぐ）。
+  //  upInside/upGap/upSemis（soundModel）: 2026-11-21 今までの判定が裏声でない所を AIだけで「裏声」にするのは、今の音（upGap 秒以上の無音か upSemis 半音以上の跳びで区切る）が始まって upInside 秒より後を中心にした AIの窓だけで決める。
+  //   リアルタイムは先の窓が無いので、前の音や無音を聞いた窓で 地声の出だしが「裏声」になっていた（vid1121c 16.7・17.9・20.3・22.1・26.5秒）。新しい音では 前の音の裏声も引き継がない。今までの判定が地声の所は 今の音の中の窓が upChestWin 個以上ある時だけ。
+  //  rawListen（soundModel）: 再生で 歌声だけの音に加えて 元の音でもAIを聞く（worker.js、p2）。false で 今まで通り1回だけ。
+  //  2026-11-21 けんじょうさん報告（hiC#・556Hz の裏声が前半「ミックス」、同じ音程の後半は「裏声orミックス」）: 再生は 歌声だけを取り出した音でAIを聞くので、取り出しで裏声らしさが消える事がある。
+  //   再生では AIを元の音でも聞き（p2）、歌声だけでは headQ 未満でも 元の音で clearQ より上なら 迷う所「裏声orミックス」（AIだけで地声にするのも 元の音で clearQ 以下の時だけ）。clearQ 0.04 = けんじょうさんの地声（vid1121b 9秒、元の音で最大0.026）と この裏声（最小0.049）の間。
+  //   blipSec = 裏声側の同じ音（blipSemis 半音以内）の途中に挟まった blipSec 秒以下の「ミックス」は「裏声orミックス」（再生は前後を見て、リアルタイムは 裏声側の音から切り替わって blipSec 秒まで）。
   //  2026-11-21 けんじょうさん指示「禁止の4項目（ファルセット→ミックス など）を0コマに」: sureKeep = AIがはっきり完全なファルセット（q ≥ soundModel.uraP）と聞いていて、芯が一瞬だけ（前 sureBack 秒から今までで 芯のあるフレームが sureFrac 未満）の所は「ミックス」にしない。ずっと芯がある（ミックス３など）は今までどおり「ミックス」。
   //   onsetSec = 無音のあと onsetSec 秒以内（AIの窓の半分 0.25 秒より長い onsetGap 秒以上 声が切れた後の 出だし）は、AIの窓に無音が混ざって q が低く出るので、q だけで「ミックス」にしない（今までの判定の 裏声 のまま）。
   // 2026-11-21 けんじょうさん指示: メーターの針が真ん中（ミックス）より右で「裏声」と出る所は コード4（表示「ミックス」）。完全なファルセット（keepSure）は 裏声 のまま（リアルタイム・再生・書き出し 共通、GaugeTimeline）。
@@ -343,16 +351,16 @@ function headDense(f) {
   return f.hrichDb >= H.hrich && isFinite(f.h1h2) && f.h1h2 <= H.h1h2 && f.cpp8k >= H.cpp && !(isFinite(f.breathDb) && f.breathDb > H.breath) ? 1 : 0;
 }
 /** 2026-11-21 裏声（2）を 完全なファルセット（2）とヘッドボイス（4）に分ける。dense[lo..hi] は headDense、q は AIの裏声らしさ（無ければ NaN）。 */
-function headSplitRegister(reg, dense, lo, hi, q, onsetAge, hop) {
+function headSplitRegister(reg, dense, lo, hi, q, onsetAge, hop, q2, runLo) {
   const H = RC.headSplit; if (!H || reg !== REG.falsetto) return reg;
   if (H.sureKeep && isFinite(q) && RC.soundModel && q >= RC.soundModel.uraP && hop > 0) { // AIがはっきり完全なファルセットで 芯は一瞬だけ → 裏声 のまま
     let n = 0, d = 0; for (let i = Math.max(0, lo - Math.round(H.sureBack / hop)); i <= Math.min(dense.length - 1, hi); i++) if (dense[i] >= 0) { n++; if (dense[i] > 0) d++; }
     if (n > 0 && d < H.sureFrac * n) return reg;
   }
   if (H.onsetSec && onsetAge < H.onsetSec) return reg; // 無音のあとの出だし: AIの窓に無音が混ざり 芯の判定もフレームが少ないので、今までの判定の 裏声 のまま
-  let n = 0, d = 0; for (let i = Math.max(0, lo); i <= Math.min(dense.length - 1, hi); i++) if (dense[i] >= 0) { n++; if (dense[i] > 0) d++; }
+  let n = 0, d = 0; for (let i = Math.max(0, lo, H.denseRun && isFinite(runLo) ? runLo : 0); i <= Math.min(dense.length - 1, hi); i++) if (dense[i] >= 0) { n++; if (dense[i] > 0) d++; }
   if (n > 0 && d >= H.frac * n) return REG.uraMix; // 芯のあるヘッドボイス →「ミックス」
-  if (isFinite(q) && q < H.headQ) return REG.uraMix; // AIははっきり裏声ではない →「ミックス」
+  if (isFinite(q) && q < H.headQ) return !(H.clearQ > 0) || !isFinite(q2) || q2 <= H.clearQ ? REG.uraMix : REG.uraOrMix; // AIははっきり裏声ではない →「ミックス」。再生で 元の音で聞いたAI（q2）が clearQ より上（2回の聞き取りが食い違う）→ 迷う所
   if (isFinite(q) && q < H.orQ) return REG.uraOrMix; // AIが中間で 芯もはっきりしない → 迷う所「裏声orミックス」
   return reg;
 }
@@ -362,14 +370,14 @@ function uraRightRegister(reg, position, sure) {
   return U.mode === 'keepSure' && sure ? reg : REG.uraOrMix; // 2026-11-21 右側: 完全なファルセットは 裏声、はっきりしない裏声は 迷う所「裏声orミックス」（芯のある所・AIがはっきり裏声でない所は headSplit で もう「ミックス」）
 }
 /** 2026-11-21 音で聞き分けるAIの結果（track: { hop, t0, p: 窓の中心ごとの 裏声らしさ }）。t の前後 halfWin 秒の中央値。無ければ NaN。 */
-function soundQ(track, t) {
+function soundQ(track, t, from) {
   if (!track || !track.p || !track.p.length || !RC.soundModel) return NaN;
   const h = RC.soundModel.halfWin, a = Math.max(0, Math.ceil((t - h - track.t0) / track.hop - 1e-9)), b = Math.min(track.p.length - 1, Math.floor((t + h - track.t0) / track.hop + 1e-9));
-  const v = []; for (let i = a; i <= b; i++) if (isFinite(track.p[i])) v.push(track.p[i]);
+  const v = [], fr = isFinite(from) ? from : -Infinity; for (let i = a; i <= b; i++) if (isFinite(track.p[i]) && track.t0 + i * track.hop >= fr - 1e-9) v.push(track.p[i]);
   soundQ.stale = false;
   if (!v.length && track.live) { soundQ.stale = true; // リアルタイム: その時刻の窓がまだ無い時は 直近 liveBack 秒以内の窓（最大2つ）
-    for (let i = Math.min(b, track.p.length - 1); i >= 0 && v.length < 2 && track.t0 + i * track.hop >= t - RC.soundModel.liveBack; i--) if (isFinite(track.p[i])) { v.push(track.p[i]); soundQ.staleFrom = track.t0 + i * track.hop; } }
-  if (!v.length) return NaN; v.sort((x, y) => x - y);
+    for (let i = Math.min(b, track.p.length - 1); i >= 0 && v.length < 2 && track.t0 + i * track.hop >= Math.max(t - RC.soundModel.liveBack, fr - 1e-9); i--) if (isFinite(track.p[i])) { v.push(track.p[i]); soundQ.staleFrom = track.t0 + i * track.hop; } }
+  soundQ.n = v.length; if (!v.length) return NaN; v.sort((x, y) => x - y);
   return v.length % 2 ? v[v.length >> 1] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2;
 }
 /** 2026-11-21 2段階: AIで 地声か裏声か → 裏声はそのまま固定、地声側だけ今までの基準（ミックス・裏声orミックス）。st = { ura } を前の状態として持ち回る。 */
@@ -378,12 +386,21 @@ function onsetTrack(o, t, voiced) {
   if (!voiced) return t - o.on; const gap = RC.headSplit && RC.headSplit.onsetGap || 0.1;
   if (t - o.last > gap) o.on = t; o.last = t; return t - o.on;
 }
-function soundRegister(state, q, voiced, st, noteChest, stale) {
+/** 2026-11-21 今の音の始まり（upGap 秒以上の無音か upSemis 半音以上の跳び）。o = { t, hz, start }。 */
+function runTrack(o, t, hz) {
+  const SM = RC.soundModel; if (!(hz > 0)) return o.start;
+  const j = o.hz > 0 ? 12 * log2(hz / o.hz) : 0, us = SM && SM.upSemis || 0.8;
+  if (!(o.hz > 0) || t - o.t > (SM && SM.upGap || 0.05) + 1e-9 || Math.abs(j) >= us) { o.start = t; o.up = o.hz > 0 && j >= us && t - o.t <= 0.1; } // up: 上に跳んで始まった音
+  o.t = t; o.hz = hz; return o.start;
+}
+function soundRegister(state, q, voiced, st, noteChest, stale, q2, qUp, newRun, qUpN) {
   const SM = RC.soundModel;
+  if (newRun) st.ura = false;
   if (!SM || !isFinite(q)) { st.ura = false; return state; }
-  st.ura = voiced && (q >= SM.uraP || (st.ura && q >= SM.uraP - SM.offHyst));
+  const up = state === REG.falsetto || qUp === undefined ? q : state === REG.chest && !(qUpN >= (SM.upChestWin || 1)) ? NaN : qUp; // 今までの判定が裏声でない所は 今の音の中の窓（qUp）だけで
+  st.ura = voiced && ((isFinite(up) && up >= SM.uraP) || (st.ura && q >= SM.uraP - SM.offHyst));
   if (st.ura) return REG.falsetto;
-  if (state === REG.falsetto && q <= SM.vetoP && (noteChest || (!stale && q <= SM.vetoHard))) return REG.chest; // 少し前の窓（stale）だけの時は 同じ音の地声らしさも要る
+  if (state === REG.falsetto && q <= SM.vetoP && (noteChest || (!stale && q <= SM.vetoHard))) return RC.headSplit && q2 > RC.headSplit.clearQ ? REG.uraOrMix : REG.chest; // 再生: 元の音で聞いたAI（q2）が clearQ より上（はっきり地声でない）時は 迷う所「裏声orミックス」（裏声にはしない） // 少し前の窓（stale）だけの時は 同じ音の地声らしさも要る
   return state;
 }
 function octaveFixedHz(hz, octs, lo, hi) {
@@ -738,8 +755,8 @@ function attachRegister(frames, mono44100, onProgress, personal, sound) {
   const P = personal || null, cl = new RegisterClassifier(44100, classifierOpts(P));
   const track = cl.analyze(mono44100, { onProgress, personal: P });
   if (!track.frameCenters.length) return frames;
-  const first = track.frameCenters[0], hopS = cl.hop / cl.sampleRate, pc = new PitchContinuity(), sst = {}, ons = { last: -99, on: -99 };
-  return frames.map(f => {
+  const first = track.frameCenters[0], hopS = cl.hop / cl.sampleRate, pc = new PitchContinuity(), sst = {}, ons = { last: -99, on: -99 }, run = { t: -99, hz: 0, start: -99 };
+  const out = frames.map(f => {
     const g = Object.assign({}, f);
     const c = track.frameCenters, lo = Math.max(0, Math.ceil((f.seconds - RC.fallbackHalfWindowSeconds - first) / hopS - 1e-9)), hi = Math.min(c.length - 1, Math.floor((f.seconds + RC.fallbackHalfWindowSeconds - first) / hopS + 1e-9));
     if (!(f.hz > 0)) { const fb = RegisterClassifier.fallbackPitch(track, f.seconds); if (fb !== null) { g.hz = fb; g.fallback = true; } }
@@ -747,12 +764,36 @@ function attachRegister(frames, mono44100, onProgress, personal, sound) {
     { const h3 = pc.push(g.hz, cfMedian(track.f0s, lo, hi), !!g.octaveFixed); if (h3 !== g.hz) { g.hz = h3; g.continuityFixed = true; } }
     g.register = RegisterClassifier.stateAt(track, f.seconds, hopS, first);
     const onsetAge = onsetTrack(ons, f.seconds, g.hz > 0);
-    const q = sound ? soundQ(sound, f.seconds) : NaN;
-    if (sound) g.register = soundRegister(g.register, q, g.hz > 0, sst, f.seconds >= first && track.nch[Math.min(track.nch.length - 1, Math.floor((f.seconds - first) / hopS + 1e-9))]);
+    const q = sound ? soundQ(sound, f.seconds) : NaN, q2 = sound && sound.p2 ? soundQ({ t0: sound.t0, hop: sound.hop, p: sound.p2 }, f.seconds) : NaN; // q2: 2026-11-21 元の音（分離前）で聞いたAI
+    const rs = runTrack(run, f.seconds, g.hz), qUp = sound && g.register !== REG.falsetto && RC.soundModel && RC.soundModel.upInside >= 0 ? soundQ(sound, f.seconds, rs + RC.soundModel.upInside) : undefined, qUpN = soundQ.n;
+    if (sound) g.register = soundRegister(g.register, q, g.hz > 0, sst, f.seconds >= first && track.nch[Math.min(track.nch.length - 1, Math.floor((f.seconds - first) / hopS + 1e-9))], false, q2, qUp, g.hz > 0 && rs === f.seconds, qUpN);
+    if (g.register === REG.chest && RC.headSplit && RC.headSplit.chestUp && RC.soundModel && q2 >= RC.headSplit.orQ && f.seconds >= first) { const pf = track.probs[Math.max(0, Math.min(track.probs.length - 1, Math.round((f.seconds - first) / hopS)))]; if (pf >= RC.pHead && pf <= 1) g.register = REG.uraOrMix; }
     if (g.register === REG.falsetto && RC.headSplit) { const hw = RC.headSplit.halfWin, a = Math.ceil((f.seconds - hw - first) / hopS - 1e-9), b = Math.floor((f.seconds + RC.fallbackHalfWindowSeconds - first) / hopS + 1e-9); // リアルタイムと同じ: 前 halfWin 秒〜少し先
-      g.register = headSplitRegister(g.register, track.dense, a, b, q, onsetAge, hopS); if (g.register === REG.falsetto) g.uraSure = isFinite(q) && RC.soundModel && q >= RC.soundModel.uraP; }
+      g.register = headSplitRegister(g.register, track.dense, a, b, q, onsetAge, hopS, q2, run.up ? Math.ceil((rs - first) / hopS - 1e-9) : NaN); if (g.register === REG.falsetto) g.uraSure = isFinite(q) && RC.soundModel && q >= RC.soundModel.uraP; }
     return g;
   });
+  return blipFill(out);
+}
+/** 2026-11-21 リアルタイム版: 裏声側の音から 同じ音のまま「ミックス」に変わって blipSec 秒までは「裏声orミックス」。 */
+function liveBlip(o, g) {
+  const H = RC.headSplit; if (!H || !(H.blipSec > 0)) return;
+  const mix = g.register === REG.mix || g.register === REG.uraMix || g.register === REG.chest, v = g.hz > 0;
+  if (mix && v && o.sideHz > 0 && Math.abs(12 * log2(g.hz / o.sideHz)) <= H.blipSemis) { if (o.from < 0) o.from = g.seconds; if (g.seconds - o.from <= H.blipSec) g.register = REG.uraOrMix; return; }
+  o.from = -1; o.sideHz = v && (g.register === REG.falsetto || g.register === REG.uraOrMix) ? g.hz : 0;
+}
+/** 2026-11-21 再生: 裏声側（裏声・裏声orミックス）の同じ音の途中に挟まった 短い「ミックス」（blipSec 秒以下・blipSemis 半音以内・声が途切れない）は「裏声orミックス」。 */
+function blipFill(fr) {
+  const H = RC.headSplit; if (!H || !(H.blipSec > 0)) return fr;
+  const side = (r) => r === REG.falsetto || r === REG.uraOrMix, isMix = (r) => r === REG.mix || r === REG.uraMix || r === REG.chest, semi = (a, b) => Math.abs(12 * log2(a / b));
+  for (let i = 1; i < fr.length; i++) {
+    if (!isMix(fr[i].register) || !(fr[i].hz > 0) || !(side(fr[i - 1].register) || fr[i - 1].register === REG.none) || !(fr[i - 1].hz > 0)) continue;
+    let j = i; while (j < fr.length && isMix(fr[j].register) && fr[j].hz > 0) j++;
+    if (j >= fr.length || !side(fr[j].register) || !(fr[j].hz > 0) || fr[j].seconds - fr[i].seconds > H.blipSec) { i = j; continue; }
+    const ref = fr[i - 1].hz; let ok = semi(fr[j].hz, ref) <= H.blipSemis; for (let k = i; k < j && ok; k++) ok = semi(fr[k].hz, ref) <= H.blipSemis;
+    if (ok) for (let k = i; k < j; k++) fr[k].register = REG.uraOrMix;
+    i = j;
+  }
+  return fr;
 }
 /** Full offline pipeline: mono at any rate -> 20 ms frames with hz (+fallback) and register. */
 function analyzeMono(mono, rate, onProgress, personal, sound) {
@@ -848,14 +889,17 @@ class LivePitchStream {
     }
     const onsetAge = onsetTrack(this.ons, f.seconds, g.hz > 0);
     if (f.seconds >= this.firstCenter) g.register = this.states[Math.min(this.states.length - 1, Math.floor((f.seconds - this.firstCenter) / this.stateHop + 1e-9))];
+    const rs = runTrack(this.run || (this.run = { t: -99, hz: 0, start: -99 }), f.seconds, g.hz); // 2026-11-21 今の音の始まり
     if (this.sound) { // 少し前の窓（stale）は、同じ音がその窓の時刻から続いている時だけ使う（前の音の地声で 次の音の裏声を消さない）
       const q = soundQ(this.sound, f.seconds), si = f.seconds >= this.firstCenter ? Math.min(this.nch.length - 1, Math.floor((f.seconds - this.firstCenter) / this.stateHop + 1e-9)) : -1;
       const sameNote = si >= 0 && this.nage[si] * this.stateHop >= f.seconds - (soundQ.staleFrom - 0.25);
       const young = RC.soundModel && RC.soundModel.vetoHardAge > 0 && !(si >= 0 && this.nage[si] * this.stateHop >= RC.soundModel.vetoHardAge); // 2026-11-21 リアルタイム: 始まったばかりの音は AIの窓に前の音が混ざるので、q だけ（vetoHard）では 地声にしない（同じ音の地声らしさ noteChest は要る）
-      g.register = soundRegister(g.register, q, g.hz > 0, this.sst, si >= 0 && this.nch[si], (soundQ.stale && !sameNote) || young); g.q = q; }
+      const stale0 = soundQ.stale, qUp = g.register !== REG.falsetto && RC.soundModel && RC.soundModel.upInside >= 0 ? soundQ(this.sound, f.seconds, rs + RC.soundModel.upInside) : undefined, qUpN = soundQ.n;
+      g.register = soundRegister(g.register, q, g.hz > 0, this.sst, si >= 0 && this.nch[si], (stale0 && !sameNote) || young, undefined, qUp, g.hz > 0 && rs === f.seconds, qUpN); g.q = q; }
     if (g.register === REG.falsetto && RC.headSplit && f.seconds >= this.firstCenter) { // リアルタイム: 前 halfWin 秒〜少し先（ファイル解析と同じ窓）
       const q = this.sound ? g.q : NaN, a = Math.ceil((f.seconds - RC.headSplit.halfWin - this.firstCenter) / this.stateHop - 1e-9), b = Math.min(this.states.length - 1, Math.floor((f.seconds + RC.fallbackHalfWindowSeconds - this.firstCenter) / this.stateHop + 1e-9));
-      g.register = headSplitRegister(g.register, this.dense, a, b, q, onsetAge, this.stateHop); if (g.register === REG.falsetto) g.uraSure = isFinite(q) && q >= RC.soundModel.uraP; }
+      g.register = headSplitRegister(g.register, this.dense, a, b, q, onsetAge, this.stateHop, undefined, this.run.up ? Math.ceil((rs - this.firstCenter) / this.stateHop - 1e-9) : NaN); if (g.register === REG.falsetto) g.uraSure = isFinite(q) && q >= RC.soundModel.uraP; }
+    liveBlip(this.blip || (this.blip = { from: -1, sideHz: 0 }), g);
     delete g.q;
     return g;
   }

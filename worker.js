@@ -1,6 +1,6 @@
 /* Analysis worker: runs entirely on this device. Nothing is uploaded.
    process() = iOS LocalAudioPipeline.process (原音 / 歌声 / 歌声＋保守的補完, 出力音声 原音 / 歌声のみ / 伴奏のみ). */
-importScripts('core.js?v=20261121ng0', 'sep.js?v=20261121ng0', 'sound.js?v=20261121ng0');
+importScripts('core.js?v=20261121tl1', 'sep.js?v=20261121tl1', 'sound.js?v=20261121tl1');
 let live = null, sessions = null, ortReady = null, cancelled = false, ortLib = null, soundReady = null, soundSession = null, liveSound = null, soundChain = Promise.resolve(), soundBusy = 0;
 function loadOrtLib() {
   if (ortLib) return ortLib;
@@ -68,7 +68,8 @@ self.onmessage = async (e) => {
       else {
         const v16 = C.resampleAll(sep.mono, 44100, 16000);
         const vocal = C.analyzePitch16k(v16, prog(0.75, 0.8, '解析'));
-        const snd = await soundTrack(sep.mono, prog(0.8, 0.9, '声の聞き分け'));
+        const snd = await soundTrack(sep.mono, prog(0.8, C.RC.soundModel && C.RC.soundModel.rawListen ? 0.85 : 0.9, '声の聞き分け'));
+        if (snd && C.RC.soundModel && C.RC.soundModel.rawListen) { const raw = await soundTrack(mono, prog(0.85, 0.9, '声の聞き分け')); if (raw && raw.p.length === snd.p.length) snd.p2 = raw.p; } // 2026-11-21 元の音でも聞く（歌声の取り出しで裏声らしさが消えた所の確認）
         frames = C.attachRegister(m.analysis === 'vocal' ? vocal : S.conservativeFusion(vocal, original), sep.mono, prog(0.9, 1, '解析'), m.personal || null, snd);
       }
       const p = pack(frames), tr = [p.hz.buffer, p.reg.buffer, p.fb.buffer];
