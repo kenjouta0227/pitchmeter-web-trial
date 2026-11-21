@@ -1,6 +1,6 @@
 /* Analysis worker: runs entirely on this device. Nothing is uploaded.
    process() = iOS LocalAudioPipeline.process (原音 / 歌声 / 歌声＋保守的補完, 出力音声 原音 / 歌声のみ / 伴奏のみ). */
-importScripts('core.js?v=20261121tl3', 'sep.js?v=20261121tl3', 'sound.js?v=20261121tl3');
+importScripts('core.js?v=20261122tl4', 'sep.js?v=20261122tl4', 'sound.js?v=20261122tl4');
 let live = null, sessions = null, ortReady = null, cancelled = false, ortLib = null, soundReady = null, soundSession = null, liveSound = null, soundChain = Promise.resolve(), soundBusy = 0;
 function loadOrtLib() {
   if (ortLib) return ortLib;
@@ -14,7 +14,7 @@ function loadSound() {
   if (soundReady) return soundReady;
   soundReady = (async () => {
     const ort = loadOrtLib(), t0 = Date.now();
-    const r = await fetch(self.PMSound.MODEL + '?v=20261121tl3snd', { credentials: 'same-origin' }); if (!r.ok) throw new Error('sound model ' + r.status);
+    const r = await fetch(self.PMSound.MODEL + '?v=20261122tl4snd', { credentials: 'same-origin' }); if (!r.ok) throw new Error('sound model ' + r.status);
     soundSession = await ort.InferenceSession.create(new Uint8Array(await r.arrayBuffer()), { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
     self.postMessage({ type: 'soundReady', ms: Date.now() - t0 });
     return soundSession;
