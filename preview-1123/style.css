@@ -298,3 +298,7 @@ body.fs-open #bottomBar{display:none}
 .liveClose svg{width:34px;height:34px;padding:9px;box-sizing:border-box;border-radius:50%;background:rgba(37,35,42,.9);box-shadow:inset 0 0 0 1px var(--border,#48434e)}
 .liveClose:active svg{transform:scale(.92)}
 #tab-live .scroll{padding-right:56px}
+/* 2026-11-23 分析の「リアルタイム」ボタン：枠を太く（3px）・枠も文字もアイコンも 紫→ピンク のグラデーション（左が紫、右がピンク） */
+#liveBtn{border:3px solid transparent;background:linear-gradient(var(--control),var(--control)) padding-box,linear-gradient(90deg,#bb7ce8,#f285be) border-box}
+#liveBtn .lbText{background:linear-gradient(90deg,#bb7ce8,#f285be);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}
+#liveBtn .ico.glyph .s{stroke:url(#g-live)}#liveBtn .ico.glyph .f{fill:url(#g-live)}

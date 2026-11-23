@@ -13,6 +13,7 @@
 </head>
 <body>
 <svg class="sprite" width="0" height="0" aria-hidden="true">
+    <defs><linearGradient id="g-live" gradientUnits="userSpaceOnUse" x1="2" y1="12" x2="22" y2="12"><stop offset="0" stop-color="#bb7ce8"/><stop offset="1" stop-color="#f285be"/></linearGradient></defs>
   <defs>
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 10.6v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="7.5" r="1.15" fill="currentColor"/></symbol>
     <symbol id="i-chevdown" viewBox="0 0 24 24"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
@@ -65,7 +66,7 @@
       <!-- 1つの入力でOK: iOS Safari は「写真ライブラリ / ビデオを撮る / ファイルを選択」の標準メニューを出す -->
       <input type="file" id="fileInput" accept="video/*,audio/*,.mp4,.mov,.m4v,.mp3,.m4a,.wav,.aac,.caf,.aif,.aiff" hidden>
       <!-- リアルタイム（iOS 2026-11-23: 中央タブから「分析」のボタンへ移動） -->
-      <button class="sbtn big" id="liveBtn"><svg class="ico glyph" viewBox="0 0 24 24" data-glyph="live"></svg>リアルタイム</button>
+      <button class="sbtn big" id="liveBtn"><svg class="ico glyph" viewBox="0 0 24 24" data-glyph="live"></svg><span class="lbText">リアルタイム</span></button>
       <button class="sbtn white big" id="sampleBtn"><svg class="ico"><use href="#i-mic"/></svg>サンプル音声を追加</button>
       <!-- 取り込んだサンプルの結果（ボタンのすぐ下）。サンプルがあるときだけ表示。 -->
       <div class="smp-summary" id="smpSummary" hidden>
