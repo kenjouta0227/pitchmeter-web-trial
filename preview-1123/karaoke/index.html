@@ -8409,11 +8409,6 @@ html.pm-app .pm-info,html.pm-app #combo-bar .pm-info,html.pm-app #combo .pm-info
 html.pm-app #combo .pm-info svg{width:17px;height:17px;flex:none}html.pm-app #combo .pm-info.sm svg{width:13px;height:13px}html.pm-app .pm-info.sm{width:28px;height:28px}html.pm-app .pm-info.sm svg{width:13px;height:13px}
 html.pm-app #pm-pick-row{display:flex;align-items:center;gap:4px;flex-basis:100%;width:100%}
 html.pm-app #pm-pick-row #c-pick{flex:1 1 auto;min-width:0}
-html.pm-app #combo-mixer.pm-seek{margin:0!important;padding:8px 14px 10px!important;border:1px solid rgba(255,255,255,.06)!important;border-radius:16px;gap:0;justify-content:flex-start}
-html.pm-app #combo-mixer.pm-seek .sk{gap:4px;padding:0;border:0}
-html.pm-app #combo-mixer.pm-seek .pm-seek-h{display:flex;align-items:center;justify-content:space-between;margin:-4px -8px -4px 0}
-html.pm-app #combo-mixer.pm-seek input[type=range]{margin:0;min-height:28px}
-html.pm-app #combo-mixer.pm-seek .sk-range{margin:0;font-size:12px}
 #pm-imodal{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;padding:24px;font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans",sans-serif}
 #pm-imodal[hidden]{display:none}
 #pm-imodal .pm-ibox{width:100%;max-width:420px;background:rgb(23,23,28);color:rgb(236,236,239);border-radius:20px;padding:20px;display:flex;flex-direction:column;gap:16px;box-sizing:border-box}
@@ -8761,7 +8756,6 @@ function scoreScreen() { const b = $('c-score'); if (!b || b.dataset.pmResult) r
 // (2) 説明の文（LIVE カラオケ v17 の説明文そのまま。音程バーの色の説明 ⓘ は 11-23 19:27 指示で外した）は、アプリの既存の ⓘ と同じ丸い i ボタンにして、押した時だけ出す（StudioInformationModal と同じ見た目）
 const PM_INFO = {
   'カラオケ': 'フレーズごとに見本を表示。動く縦メーターに合わせて歌おう。',
-  '再生位置': 'バーを動かすと、その位置から再生・採点します。「停止」は一時停止（採点しません）。「リセット」は、再生中なら今の位置から採点し直し、止まっているときは最初（0:00）に戻します。「採点する」を押すと自動で止まり、採点開始位置から止めた位置までを採点します。',
   '写真かファイルから選ぶ': '素材の種類：伴奏入り（端末内で歌声を分離）\n写真ライブラリからは画面収録などの音声付き動画を、ファイルからは動画やMP3・M4A・WAVなどの音声を選べます。HEVC動画・画面録画・MP3/M4A/WAV/FLAC/OGG/AIFFなどに対応。長さ・サイズの上限はありません（長い曲ほど分離に時間がかかります。目安：曲の長さの半分ほど）。写真は音が無いので使えません。'
 };
 const PM_ISVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 10.6v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="7.5" r="1.15" fill="currentColor"/></svg>';
@@ -8777,13 +8771,6 @@ function infoUI() {
   if (combo && bar && !$('pm-khead')) { const h = document.createElement('div'); h.id = 'pm-khead';
     h.innerHTML = '<div class="pm-brand">REALTIME / KARAOKE</div><div class="pm-trow"><h1 class="pm-title">見本に重ねて、<br>声を描こう。</h1></div>';
     h.querySelector('.pm-trow').appendChild(infoBtn('カラオケ')); bar.parentNode.insertBefore(h, bar); }
-  // 2026-11-23 19:29 指示：「再生位置」のカードを 再生・停止・リセット・採点する の段のすぐ上へ。下の説明文は ⓘ に（シーク・採点区間の動きは LIVE のまま）
-  const sk = $('sk'), row = $('combo-score-row'), mixer = $('combo-mixer');
-  if (sk && row && mixer && !mixer.classList.contains('pm-seek')) {
-    sk.querySelectorAll('.mx-small').forEach((p) => { if (/^\s*バーを動かすと/.test(p.textContent)) p.remove(); });
-    const h = sk.querySelector('h3'); if (h) { const t = document.createElement('div'); t.className = 'pm-seek-h'; h.parentNode.insertBefore(t, h); t.appendChild(h); t.appendChild(infoBtn('再生位置', true)); }
-    // 再生位置のカード（LIVE の #combo-mixer そのもの。中身は #sk だけ）を 再生・停止・リセット・採点する の段のすぐ上へ移す。LIVE の #combo-mixer の見た目（色・数字）はそのまま効く
-    if (sk.parentNode !== mixer) mixer.appendChild(sk); mixer.classList.add('pm-seek'); row.parentNode.insertBefore(mixer, row); }
   const pick = $('c-pick'); if (pick && !$('pm-pick-row')) { const r = document.createElement('div'); r.id = 'pm-pick-row'; pick.parentNode.insertBefore(r, pick); r.appendChild(pick); r.appendChild(infoBtn('写真かファイルから選ぶ')); }
 }
 function open() { tidy(); useDefaultMic(); styleApp(); layout(); infoUI(); rangeFill(); scoreScreen(); { const cm = $('c-mic'); if (cm) cm.onclick = () => { useDefaultMic(); $('start').click(); }; } try { self.PMSingle.openCombo(); } catch (e) { const s = $('c-status'); if (s) s.textContent = 'カラオケを開けませんでした（' + (e && e.message || e) + '）'; } }
