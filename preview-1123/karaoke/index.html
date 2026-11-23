@@ -8398,7 +8398,7 @@ html.pm-app #c-songs,html.pm-app #c-clean,html.pm-app #c-close,html.pm-app #c-pe
 html.pm-app #combo-gauge .gauge,html.pm-app #combo-gauge .gauge *{touch-action:pan-y!important;cursor:default!important;user-select:none;-webkit-user-select:none}
 html.pm-app #kara-host.inbox,html.pm-app #kara-host.inbox #kara-frame{pointer-events:none}
 html.pm-app #combo{touch-action:pan-y;overscroll-behavior-y:contain}
-/* アプリ版のみ（2026-11-23 見本＝LIVE カラオケ v17 の画面）：カラオケのバーの高さを見本と同じくらいに（音程バーの太さ 14px は LIVE のまま＝見本と同じ見え方）・見出し・ⓘ */
+/* アプリ版のみ（2026-11-23 見本＝LIVE カラオケ v17 の画面）：カラオケのバーの高さを見本と同じくらいに（音程バーの太さは見本バー 8px（元14px）・声の印も同じ太さ、再生ヘッドは3px。判定は変えない）・見出し・ⓘ */
 html.pm-app #combo-kara{aspect-ratio:auto!important;height:clamp(110px,32vw,160px)}
 html.pm-app #pm-khead{padding:16px 16px 2px}
 html.pm-app #pm-khead .pm-brand{font-size:13px;font-weight:700;letter-spacing:3px;color:#f285be}
@@ -8747,7 +8747,10 @@ html.pm-app #pm-vol label.mx{gap:0;line-height:13px}
 html.pm-app #pm-vol input[type=range]{height:22px;margin:-5px 0}
 html.pm-app #combo-score-row{gap:6px}
 html.pm-app #combo-score-row #pm-sk button,html.pm-app #combo-score-row #c-score,html.pm-app #combo-score-row #pm-cscore #c-score{min-height:44px}
-/* メーターカード：見本（いまの声）くらいの高さ・紫枠。文面と判定は変えない。カラオケ音程バーの太さは触らない。 */
+/* 採点する：文字をボタン枠内に収める（1列・1画面レイアウトは維持） */
+html.pm-app #combo-score-row #c-score .cs-main,html.pm-app #combo-score-row #pm-cscore #c-score .cs-main{font-size:clamp(11px,3.15vw,13px);letter-spacing:0;max-width:100%;overflow:hidden}
+html.pm-app #combo-score-row #pm-cscore #c-score{padding:0 4px}
+/* メーターカード：見本（いまの声）くらいの高さ・紫枠。文面と判定は変えない。 */
 html.pm-app #combo-gauge .gauge{padding:8px 12px 6px!important;border-radius:16px!important;background:linear-gradient(180deg,rgba(37,35,42,.85),#17171c)!important;border:0!important;box-shadow:0 0 0 1.5px rgba(187,124,232,.35),0 4px 10px rgba(187,124,232,.16)!important;overflow:visible}
 html.pm-app #combo-gauge .gauge::before{content:"";position:absolute;inset:0;border-radius:16px;padding:3px;background:linear-gradient(135deg,rgba(187,124,232,.75),rgba(242,133,190,.75));-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;pointer-events:none;z-index:1}
 html.pm-app #combo-gauge .readout{height:auto;min-height:22px;gap:8px;align-items:center;margin:0 0 2px}
