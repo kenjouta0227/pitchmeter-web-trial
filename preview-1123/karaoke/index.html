@@ -8795,6 +8795,16 @@ html.pm-app #combo-kara{position:relative;touch-action:pan-y;-webkit-overflow-sc
 html.pm-app #combo-kara::after{content:"";position:absolute;inset:0;z-index:2;touch-action:pan-y}
 html.pm-app #kara-host.inbox{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;z-index:1;pointer-events:none;background:transparent}
 html.pm-app #kara-host.inbox,html.pm-app #kara-host.inbox #kara-frame{pointer-events:none;touch-action:pan-y}
+/* 2026-11-24: カラオケの「写真かファイルから選ぶ」右のⓘを外し、分析タブと同じ大きさに（393×852実測：高さ73・余白12 14・文字18.2・角丸10） */
+html.pm-app #combo-bar{margin-left:16px!important;margin-right:16px!important;padding-left:0!important;padding-right:0!important}
+html.pm-app #pm-pick-row{display:block;flex-basis:100%;width:100%;gap:0}
+html.pm-app #combo-bar #c-pick,html.pm-app #pm-pick-row #c-pick,html.pm-app #combo-bar button#c-pick{
+  display:flex;align-items:center;justify-content:center;box-sizing:border-box;
+  width:100%;flex:none;flex-basis:auto;max-width:100%;
+  padding:12px 14px!important;min-height:73px!important;height:73px;
+  font-size:18.2px;font-weight:600;line-height:21.84px;border-radius:10px;
+  border:1px solid var(--pm-btn-border,#a16f90)
+}
 `;
   document.body.appendChild(st); // 元の style より後ろに置く（同じ強さの指定はこちらが勝つ）
 }
@@ -8908,7 +8918,6 @@ function scoreScreen() { const b = $('c-score'); if (!b || b.dataset.pmResult) r
 const PM_INFO = {
   'カラオケ': 'フレーズごとに見本を表示。動く縦メーターに合わせて歌おう。',
   '再生位置': 'バーを動かすと、その位置から再生・採点します。「停止」は一時停止（採点しません）。「リセット」は、再生中なら今の位置から採点し直し、止まっているときは最初（0:00）に戻します。「採点する」を押すと自動で止まり、採点開始位置から止めた位置までを採点します。',
-  '写真かファイルから選ぶ': '素材の種類：伴奏入り（端末内で歌声を分離）\n写真ライブラリからは画面収録などの音声付き動画を、ファイルからは動画やMP3・M4A・WAVなどの音声を選べます。HEVC動画・画面録画・MP3/M4A/WAV/FLAC/OGG/AIFFなどに対応。長さ・サイズの上限はありません（長い曲ほど分離に時間がかかります。目安：曲の長さの半分ほど）。写真は音が無いので使えません。',
   '音量': '歌声と伴奏を別々に調整できます（再生中も変えられます）。',
   '採点する': '再生中に押すと止めて採点'
 };
@@ -8932,7 +8941,7 @@ function infoUI() {
     const h = sk.querySelector('h3'); if (h) { const t = document.createElement('div'); t.className = 'pm-seek-h'; h.parentNode.insertBefore(t, h); t.appendChild(h); t.appendChild(infoBtn('再生位置', true)); }
     // 再生位置のカード（LIVE の #combo-mixer そのもの。中身は #sk だけ）を 再生・停止・リセット・採点する の段のすぐ上へ移す。LIVE の #combo-mixer の見た目（色・数字）はそのまま効く
     if (sk.parentNode !== mixer) mixer.appendChild(sk); mixer.classList.add('pm-seek'); row.parentNode.insertBefore(mixer, row); }
-  const pick = $('c-pick'); if (pick && !$('pm-pick-row')) { const r = document.createElement('div'); r.id = 'pm-pick-row'; pick.parentNode.insertBefore(r, pick); r.appendChild(pick); r.appendChild(infoBtn('写真かファイルから選ぶ')); }
+  const pick = $('c-pick'); if (pick && !$('pm-pick-row')) { const r = document.createElement('div'); r.id = 'pm-pick-row'; pick.parentNode.insertBefore(r, pick); r.appendChild(pick); }
   // 2026-11-24 指示：「歌声と伴奏を別々に調整できます…」と「再生中に押すと止めて採点」を ⓘ に（音量の見出し・採点するの横）。余白を詰める。「表示は音の高さと…」はそのまま。判定・採点の動きは変えない。
   const vol = $('pm-vol');
   // 2026-11-24 指示：音量スライダー（ツマミ）を「再生位置」の直下へ。1画面にバーとメーターを収める。
