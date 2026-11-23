@@ -8718,7 +8718,49 @@ html.pm-app #pm-vol input[type=range]:disabled{opacity:.4;cursor:default}
 #pm-result .pmr-btns .pmr-again{background:linear-gradient(90deg,#bb7ce8,#f285be);color:#221628;box-shadow:0 4px 14px rgba(187,124,232,.45)}
 #pm-result .pmr-btns .pmr-close{background:#25232a;color:#ececef;box-shadow:inset 0 0 0 1px #48434e}
 #pm-result.pmr-bad .pmr-big,#pm-result.pmr-bad .pmr-gauge,#pm-result.pmr-bad .pmr-rank{display:none}
-@media (prefers-reduced-motion:reduce){#pm-result::before{animation:none}}`;
+@media (prefers-reduced-motion:reduce){#pm-result::before{animation:none}}
+/* 2026-11-24：1画面にカラオケバー＋メーターを収める。ツマミと再生位置を小さく、音量は再生位置の下、メーターは見本（いまの声）くらいの高さに。バー126pxと音程バーの太さは変えない。判定・文面は変えない。 */
+html.pm-app #pm-khead{padding:8px 14px 0}
+html.pm-app #pm-khead .pm-brand{font-size:12px;letter-spacing:2px}
+html.pm-app #pm-khead .pm-title{font-size:26px;line-height:1.28;margin:4px 0 0}
+html.pm-app #pm-khead .pm-info{margin-bottom:0}
+html.pm-app #combo-bar{margin:6px 12px 0;padding:6px 12px}
+html.pm-app #combo-bar button,html.pm-app #combo-bar #c-pick{padding:8px 12px;min-height:40px}
+html.pm-app #combo-green{padding:6px 10px;gap:6px;display:flex;flex-direction:column}
+html.pm-app #combo-mixer.pm-seek{padding:4px 12px 6px!important}
+html.pm-app #combo-mixer.pm-seek .sk{gap:2px}
+html.pm-app #combo-mixer.pm-seek .pm-info,html.pm-app #pm-vol .pm-info{width:22px!important;height:22px!important;min-height:0!important;min-width:0;margin:0!important}
+html.pm-app #combo-mixer.pm-seek .pm-info svg,html.pm-app #pm-vol .pm-info svg{width:13px;height:13px}
+html.pm-app #combo-mixer.pm-seek .pm-seek-h,html.pm-app #pm-vol .pm-vol-h{min-height:0;margin:0}
+html.pm-app #combo-mixer.pm-seek h3,html.pm-app #pm-vol h3{line-height:18px;margin:0;font-size:12px}
+html.pm-app #pm-vol #mx-note{font-size:10px;line-height:13px;margin:0}
+html.pm-app #combo-mixer.pm-seek .sk-time{font-size:14px;line-height:18px}
+html.pm-app #combo-mixer.pm-seek .sk-range{margin:0;font-size:11px;line-height:14px}
+html.pm-app #combo-mixer.pm-seek input[type=range]{-webkit-appearance:none;appearance:none;display:block;width:100%;height:22px;min-height:0;margin:0;padding:0;background:transparent;cursor:pointer;touch-action:pan-y}
+html.pm-app #combo-mixer.pm-seek input[type=range]::-webkit-slider-runnable-track{height:2px;border-radius:1px;background:rgba(255,255,255,.2)}
+html.pm-app #combo-mixer.pm-seek input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:14px;margin-top:-6px;border-radius:50%;background:#fff;border:0;box-shadow:0 0 0 1px rgba(0,0,0,.18),0 1px 3px rgba(0,0,0,.45)}
+html.pm-app #combo-mixer.pm-seek input[type=range]::-moz-range-track{height:2px;border-radius:1px;background:rgba(255,255,255,.2)}
+html.pm-app #combo-mixer.pm-seek input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:#fff;border:0}
+html.pm-app #pm-vol{margin:0;padding:4px 12px;gap:1px}
+html.pm-app #pm-vol .pm-vol-h{margin:0 -6px 0 0}
+html.pm-app #pm-vol label.mx{gap:0;line-height:13px}
+html.pm-app #pm-vol input[type=range]{height:22px;margin:-5px 0}
+html.pm-app #combo-score-row{gap:6px}
+html.pm-app #combo-score-row #pm-sk button,html.pm-app #combo-score-row #c-score,html.pm-app #combo-score-row #pm-cscore #c-score{min-height:44px}
+/* メーターカード：見本（いまの声）くらいの高さ・紫枠。文面と判定は変えない。カラオケ音程バーの太さは触らない。 */
+html.pm-app #combo-gauge .gauge{padding:8px 12px 6px!important;border-radius:16px!important;background:linear-gradient(180deg,rgba(37,35,42,.85),#17171c)!important;border:0!important;box-shadow:0 0 0 1.5px rgba(187,124,232,.35),0 4px 10px rgba(187,124,232,.16)!important;overflow:visible}
+html.pm-app #combo-gauge .gauge::before{content:"";position:absolute;inset:0;border-radius:16px;padding:3px;background:linear-gradient(135deg,rgba(187,124,232,.75),rgba(242,133,190,.75));-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;pointer-events:none;z-index:1}
+html.pm-app #combo-gauge .readout{height:auto;min-height:22px;gap:8px;align-items:center;margin:0 0 2px}
+html.pm-app #combo-gauge .readout strong{font-size:16px}
+html.pm-app #combo-gauge .readout span,html.pm-app #combo-gauge .readout .register{font-size:13px!important}
+html.pm-app #combo-gauge .badge{font-size:11px!important;min-height:22px;padding:0 10px;border-radius:999px;background:rgba(72,67,78,.35);display:inline-flex;align-items:center}
+html.pm-app #combo-gauge .labels{margin:4px 0 2px;font-size:12px}
+html.pm-app #combo-gauge .track{height:8px;border-radius:8px}
+html.pm-app #combo-gauge .needle{width:16px;height:16px;border-width:2px;box-shadow:0 0 8px 2px #ffffff29}
+html.pm-app #combo-gauge .needle:before{width:2px;height:22px;top:-6px;left:5px}
+html.pm-app #combo-gauge .ticks{margin-top:6px;font-size:10px}
+html.pm-app #combo-gauge .disclaimer{margin:6px 0 0;font-size:10px;line-height:1.35}
+`;
   document.body.appendChild(st); // 元の style より後ろに置く（同じ強さの指定はこちらが勝つ）
 }
 function rangeFill() { for (const id of ['mx-v', 'mx-a']) { const r = $(id); if (!r) continue; const f = () => { const lo = Number(r.min) || 0, hi = Number(r.max) || 100; r.style.setProperty('--p', ((Number(r.value) - lo) / (hi - lo) * 100) + '%'); };
@@ -8796,6 +8838,8 @@ function infoUI() {
   const pick = $('c-pick'); if (pick && !$('pm-pick-row')) { const r = document.createElement('div'); r.id = 'pm-pick-row'; pick.parentNode.insertBefore(r, pick); r.appendChild(pick); r.appendChild(infoBtn('写真かファイルから選ぶ')); }
   // 2026-11-24 指示：「歌声と伴奏を別々に調整できます…」と「再生中に押すと止めて採点」を ⓘ に（音量の見出し・採点するの横）。余白を詰める。「表示は音の高さと…」はそのまま。判定・採点の動きは変えない。
   const vol = $('pm-vol');
+  // 2026-11-24 指示：音量スライダー（ツマミ）を「再生位置」の直下へ。1画面にバーとメーターを収める。
+  if (vol && mixer) mixer.insertAdjacentElement('afterend', vol);
   if (vol && !vol.querySelector('.pm-vol-h')) {
     const h = vol.querySelector('h3'); if (h) { const t = document.createElement('div'); t.className = 'pm-vol-h'; h.parentNode.insertBefore(t, h); t.appendChild(h); t.appendChild(infoBtn('音量', true)); }
     const note = $('mx-note');
