@@ -120,6 +120,7 @@ const INFO = {
   '音域設定': '自動は安定した解析音高から設定します。手動値は自動値とは別に保持し、切替時も残ります。',
   '全画面': 'メーターの表示を広げる、または元の表示へ戻します。\n表示のみの操作です。解析は開始しません。',
   '再生・試聴': '選択中の素材・解析音を再生、停止、移動します。\n試聴する音声は画面の選択状態を確認してください。原本は変更しません。',
+  'サンプル音声を追加': '声の種類ごとに「開始」を押して、「あー」か「うー」でのばしてください。録った声はその種類の判定基準になります。',
 };
 const infoM = modal($('infoModal'));
 function showInfo(title, text) { const host = !$('fs').hidden ? $('fs') : document.body; if ($('infoModal').parentNode !== host) host.appendChild($('infoModal')); $('infoTitle').textContent = title; $('infoText').textContent = text; infoM.open('infoClose'); }
@@ -901,9 +902,11 @@ const rec = (() => {
     if (!list.children.length) {
       for (const c of samples.CATS) {
         const row = document.createElement('div'); row.className = 'smp-row'; row.id = 'smpRow-' + c.k;
-        row.innerHTML = `<div class="smp-head"><div class="smp-name">${esc(c.name)}を録る</div><span class="spacer"></span>`
+        const gtxt = [c.guideNote, guide(c.k)].filter(Boolean).join('\n');
+        row.innerHTML = `<div class="smp-head"><div class="smp-name">${esc(c.name)}を録る</div>`
+          + `<button class="info sm" data-info-title="${esc(c.name)}を録る" data-info-text="${esc(gtxt)}" aria-label="${esc(c.name)}を録るの説明"><svg><use href="#i-info"/></svg></button>`
+          + `<span class="spacer"></span>`
           + `<span class="smp-badge" id="smpBadge-${c.k}"></span><button class="btn primary smp-start" id="smpStart-${c.k}" aria-describedby="smpRes-${c.k}">開始</button></div>`
-          + `<div class="smp-guide">${esc(c.guideNote)}<br>${esc(guide(c.k))}</div>`
           + `<p class="smp-res" id="smpRes-${c.k}" aria-live="polite"></p><button class="linkbtn smp-del" id="smpDel-${c.k}" hidden>この${esc(c.name)}のサンプルを削除</button>`;
         list.appendChild(row);
         $('smpStart-' + c.k).onclick = () => { if (phase === 'idle') start(c.k); };
@@ -919,21 +922,28 @@ const rec = (() => {
       if (res && res.kind === 'ok') { el.classList.add('ok'); el.innerHTML = `<b>${esc(res.text)}</b>\n${esc(savedText(c.k))}`; }
       else if (res && res.kind === 'err') { el.classList.add('err'); el.textContent = res.text + (r ? `\n（前に録った${c.name}のサンプルはそのまま使っています）` : ''); }
       else if (res && res.kind === 'info') { el.textContent = res.text; }
-      else el.textContent = r ? savedText(c.k) : 'まだ録っていません。いまは既定の判定基準です。';
+      else if (r) el.textContent = savedText(c.k);
+      else el.textContent = '';
+      const ib = $('smpRow-' + c.k) && $('smpRow-' + c.k).querySelector('.info');
+      if (ib) {
+        const gtxt = [c.guideNote, guide(c.k)].filter(Boolean).join('\n');
+        ib.dataset.infoText = r ? gtxt : gtxt + '\nまだ録っていません。いまは既定の判定基準です。';
+      }
     }
   }
   function renderApply() {
     const any = samples.any(), on = samples.applyOn();
     for (const id of ['smpApply', 'smpApplyMain']) { const i = $(id); i.checked = on; i.setAttribute('aria-checked', on ? 'true' : 'false'); i.disabled = !any; }
-    $('smpApplyRow').hidden = !any; $('smpApplyDesc').hidden = !any; $('smpReset').hidden = !any || phase !== 'idle';
-    $('smpApplyDesc').textContent = on ? 'オン: 録ったサンプル音声で判定します（リアルタイム・素材分析の両方）。' : 'オフ: いつもの既定の判定に戻っています。サンプルは消えていません。';
-    // 「サンプル音声を追加」ボタンのすぐ下の結果表示
+    $('smpApplyRow').hidden = !any; $('smpReset').hidden = !any || phase !== 'idle';
+    const applyText = on ? 'オン: 録ったサンプル音声で判定します（リアルタイム・素材分析の両方）。' : 'オフ: いつもの既定の判定に戻っています。サンプルは消えていません。';
+    if ($('smpApplyDesc')) { $('smpApplyDesc').textContent = applyText; $('smpApplyDesc').hidden = true; }
+    for (const id of ['smpApplyInfo', 'smpApplyInfoMain']) { const b = $(id); if (b) { b.dataset.infoTitle = 'サンプル音声を適用'; b.dataset.infoText = applyText; } }
+    // 「サンプル音声を追加」ボタンのすぐ下の結果表示（状態の数字だけ。説明文は ⓘ へ）
     $('smpSummary').hidden = !any;
     if (any) {
       const have = samples.CATS.filter(c => samples.get(c.k)).map(c => c.name), last = samples.CATS.map(c => ({ c, r: samples.get(c.k) })).filter(x => x.r).sort((x, y) => y.r.at - x.r.at)[0];
       const lines = [`登録済み: ${have.join('・')}（${have.length}/4）`];
       if (last) lines.push(`最後に反映: ${last.c.name}・${last.r.voicedSeconds.toFixed(1)}秒・${range(last.r)}`);
-      lines.push(on ? '判定はあなたの声の基準を使っています。' : '判定はいつもの既定に戻っています（サンプルは保存したまま）。');
       $('smpSumText').textContent = lines.join('\n');
     }
   }

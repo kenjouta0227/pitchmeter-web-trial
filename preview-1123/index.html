@@ -70,7 +70,7 @@
       <button class="sbtn white big" id="sampleBtn"><svg class="ico"><use href="#i-mic"/></svg>サンプル音声を追加</button>
       <!-- 取り込んだサンプルの結果（ボタンのすぐ下）。サンプルがあるときだけ表示。 -->
       <div class="smp-summary" id="smpSummary" hidden>
-        <div class="smp-switch-row"><span class="smp-switch-label" id="smpApplyLabelMain">サンプル音声を適用</span><span class="spacer"></span>
+        <div class="smp-switch-row"><span class="smp-switch-label" id="smpApplyLabelMain">サンプル音声を適用</span><button class="info sm" id="smpApplyInfoMain" data-info-title="サンプル音声を適用" data-info-text="" aria-label="サンプル音声を適用の説明"><svg><use href="#i-info"/></svg></button><span class="spacer"></span>
           <label class="switch"><input type="checkbox" role="switch" id="smpApplyMain" aria-labelledby="smpApplyLabelMain"><i></i></label></div>
         <p class="smp-sum-text" id="smpSumText" aria-live="polite"></p>
       </div>
@@ -326,10 +326,9 @@
 
 <div id="recSheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="recTitle">
   <div class="sheetBody rec-sheet">
-    <div class="row"><strong id="recTitle">サンプル音声を追加</strong><span class="spacer"></span><button class="btn small" id="recClose">閉じる</button></div>
-    <p class="rec-instr">声の種類ごとに「開始」を押して、「あー」か「うー」でのばしてください。録った声はその種類の判定基準になります。</p>
-    <div class="smp-switch-row card-like" id="smpApplyRow" hidden><span class="smp-switch-label" id="smpApplyLabel">サンプル音声を適用</span><span class="spacer"></span>
-      <label class="switch"><input type="checkbox" role="switch" id="smpApply" aria-labelledby="smpApplyLabel" aria-describedby="smpApplyDesc"><i></i></label></div>
+    <div class="row"><strong id="recTitle">サンプル音声を追加</strong><button class="info sm" data-info="サンプル音声を追加" aria-label="サンプル音声を追加の説明"><svg><use href="#i-info"/></svg></button><span class="spacer"></span><button class="btn small" id="recClose">閉じる</button></div>
+    <div class="smp-switch-row card-like" id="smpApplyRow" hidden><span class="smp-switch-label" id="smpApplyLabel">サンプル音声を適用</span><button class="info sm" id="smpApplyInfo" data-info-title="サンプル音声を適用" data-info-text="" aria-label="サンプル音声を適用の説明"><svg><use href="#i-info"/></svg></button><span class="spacer"></span>
+      <label class="switch"><input type="checkbox" role="switch" id="smpApply" aria-labelledby="smpApplyLabel"><i></i></label></div>
     <p class="caption smp-apply-desc" id="smpApplyDesc" hidden></p>
     <div class="smp-list" id="smpList"></div>
     <!-- 録音中の表示（押した行の中に移動して使う） -->
