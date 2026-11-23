@@ -8488,10 +8488,16 @@ function ensureKaraoke() {
 }
 function pmb(on) { const d = kd(); if (d) d.documentElement.classList.toggle('pmb', on); }
 function sync() {
-  if (host.classList.contains('inbox')) { const r = $('combo-kara').getBoundingClientRect();
-    host.style.left = r.left + 'px'; host.style.top = r.top + 'px'; host.style.width = r.width + 'px'; host.style.height = r.height + 'px'; }
-  else host.removeAttribute('style');
-  try { frame.contentWindow && frame.contentWindow.dispatchEvent(new Event('resize')); } catch (e) {}
+  const slot = $('combo-kara');
+  if (host && host.classList.contains('inbox') && slot) {
+    if (host.parentNode !== slot) slot.appendChild(host);
+    host.style.position = 'absolute'; host.style.left = '0px'; host.style.top = '0px'; host.style.right = '0px'; host.style.bottom = '0px'; host.style.width = '100%'; host.style.height = '100%';
+  } else if (host) {
+    const home = document.body || document.documentElement;
+    if (home && host.parentNode !== home) home.appendChild(host);
+    host.removeAttribute('style');
+  }
+  try { frame && frame.contentWindow && frame.contentWindow.dispatchEvent(new Event('resize')); } catch (e) {}
 }
 async function openFull(fromCombo) {
   fullFromCombo = !!fromCombo; host.className = 'full'; host.hidden = false; pmb(false); sync();
@@ -8779,7 +8785,16 @@ html.pm-app #pm-load .sbtn{display:inline-flex;align-items:center;justify-conten
 html.pm-app #pm-load .sbtn.small{padding:6px 10px;font-size:12px}
 html.pm-app #pm-load-err{margin:6px 14px 0;font-size:12px;line-height:1.5;color:var(--pm-text)}
 html.pm-app #pm-load-err[hidden]{display:none!important}
+
 html.pm-app #combo.pm-loading #c-pick,html.pm-app #combo.pm-loading #c-songs,html.pm-app #combo.pm-loading #pm-sk-play,html.pm-app #combo.pm-loading #pm-sk-reset,html.pm-app #combo.pm-loading #c-score,html.pm-app #combo.pm-loading #pm-cscore,html.pm-app #combo.pm-loading #sk-pos,html.pm-app #combo.pm-loading #pm-pick-row,html.pm-app #combo.pm-loading #pm-vol{opacity:.4;pointer-events:none}
+/* 2026-11-24: アプリのカラオケ画面では LIVE 試作の下地（main）を出さない。要素は残して参照は壊れないようにする。 */
+html.pm-app main{display:none!important}
+html.pm-app,html.pm-app body{height:100%!important;max-height:100%!important;overflow:hidden!important;overscroll-behavior:none}
+/* カラオケバー上の縦スワイプを #combo のスクロールに渡す（iOS では iframe の pointer-events:none が効かないことがある） */
+html.pm-app #combo-kara{position:relative;touch-action:pan-y;-webkit-overflow-scrolling:touch}
+html.pm-app #combo-kara::after{content:"";position:absolute;inset:0;z-index:2;touch-action:pan-y}
+html.pm-app #kara-host.inbox{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;z-index:1;pointer-events:none;background:transparent}
+html.pm-app #kara-host.inbox,html.pm-app #kara-host.inbox #kara-frame{pointer-events:none;touch-action:pan-y}
 `;
   document.body.appendChild(st); // 元の style より後ろに置く（同じ強さの指定はこちらが勝つ）
 }
