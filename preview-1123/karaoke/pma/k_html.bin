@@ -1409,15 +1409,15 @@ function drawPhraseGuide(g,bars,view,y,verdicts){
   const bar=bars[i],start=Math.max(bar.start,view.page.start),end=Math.min(bar.end,view.page.end);
   if(end<=start)continue;
   const x1=view.x(start),x2=view.x(end),center=y(440*2**((bar.midi-69)/12));
-  let top=center-7,bottom=center+7;
+  let top=center-4,bottom=center+4;
   const verdict=verdicts?.get(i);
   if(verdict&&!verdict.success&&verdict.shift){
    // Keep the red bar's original 8px width and measured position. Cut back only
    // the edge of this guide that would otherwise collide with the red bar.
    const shifted=y(440*2**((bar.midi+verdict.shift-69)/12));
    const gap=Math.min(1,Math.abs(shifted-center)*.25);
-   if(shifted<center)top=Math.max(top,shifted+7+gap);
-   else bottom=Math.min(bottom,shifted-7-gap);
+   if(shifted<center)top=Math.max(top,shifted+4+gap);
+   else bottom=Math.min(bottom,shifted-4-gap);
   }
   if(bottom<=top)continue;
   // Only the unpassed guide is translucent, never the meter or judged result.
@@ -1428,7 +1428,7 @@ function drawPhraseGuide(g,bars,view,y,verdicts){
  }
 }
 function drawPhraseTrace(g,data,view,y,through,step=.04){
- g.strokeStyle='#ff99ce';g.lineWidth=4;g.lineCap='round';g.lineJoin='round';g.beginPath();
+ g.strokeStyle='#ff99ce';g.lineWidth=2;g.lineCap='round';g.lineJoin='round';g.beginPath();
  const from=Math.max(0,Math.floor(view.page.start/step)),to=Math.min(data.length-1,Math.floor(Math.min(through,view.page.end)/step));
  let pen=false;
  for(let i=from;i<=to;i++){
@@ -1492,7 +1492,7 @@ function judgeGuideBar(bar,reference,actual,step=.04){
 function finalizeGuideBars(results,bars,reference,actual,through,step=.04){
  for(let i=0;i<bars.length;i++)if(!results.has(i)&&bars[i].end<=through+1e-8)results.set(i,judgeGuideBar(bars[i],reference,actual,step));
 }
-function drawGuideVerdicts(g,bars,results,view,y,height=14){
+function drawGuideVerdicts(g,bars,results,view,y,height=8){
  for(let i=0;i<bars.length;i++){
   const result=results.get(i);if(!result)continue;const bar=bars[i];
   const start=Math.max(view.page.start,bar.start),end=Math.min(view.page.end,bar.end);if(end<=start)continue;
@@ -1589,14 +1589,14 @@ function karaokeMeterGeometry(height,lo,hi){
    const yy=midiY(n);g.strokeStyle=n%12===0?'#694362':'#ffffff0c';g.lineWidth=1;g.beginPath();g.moveTo(0,yy);g.lineTo(W,yy);g.stroke();
    if(n%labelEvery===0){g.fillStyle='#a58caa';g.fillText(['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'][n%12]+(Math.floor(n/12)-1),W-30,yy-3)}
   }
-  const grad=g.createLinearGradient(0,H,0,0);grad.addColorStop(0,'#3bc4e0');grad.addColorStop(.5,'#a678ff');grad.addColorStop(1,'#f285be');g.strokeStyle=grad;g.lineWidth=6;g.lineCap='round';g.beginPath();g.moveTo(head,pad);g.lineTo(head,bottom);g.stroke();
+  const grad=g.createLinearGradient(0,H,0,0);grad.addColorStop(0,'#3bc4e0');grad.addColorStop(.5,'#a678ff');grad.addColorStop(1,'#f285be');g.strokeStyle=grad;g.lineWidth=3;g.lineCap='round';g.beginPath();g.moveTo(head,pad);g.lineTo(head,bottom);g.stroke();
   if(actual.length&&['playing','ended'].includes(mode))finalizeGuideBars(barVerdicts,bars,ref,actual,now,step);
   drawPhraseGuide(g,bars,view,y,barVerdicts);
   drawGuideVerdicts(g,bars,barVerdicts,view,y);
   const sparkle=mode==='playing'?celebration.update(view,now,ref,actual,step):null;
   if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)drawPhraseSparkles(g,W,H,sparkle);
   const currentHz=pointer.at(now);
-  if(currentHz){g.fillStyle=karaokePointerColor(currentHz);g.shadowColor='rgba(255,120,158,.38)';g.shadowBlur=6;g.beginPath();g.arc(head,Math.max(pad,Math.min(bottom,y(currentHz))),6,0,Math.PI*2);g.fill();g.shadowBlur=0}
+  if(currentHz){g.fillStyle=karaokePointerColor(currentHz);g.shadowColor='rgba(255,120,158,.38)';g.shadowBlur=3;g.beginPath();g.arc(head,Math.max(pad,Math.min(bottom,y(currentHz))),4,0,Math.PI*2);g.fill();g.shadowBlur=0}
   g.fillStyle='#ead4e8';g.font='12px system-ui';if(!ref.length){g.textAlign='center';g.fillStyle='#cbb3ce';g.fillText(W<250?'素材を選ぶと見本を表示':'素材を読み込むと見本が表示されます',W/2,H/2,Math.max(1,W-16));g.textAlign='left'}
   el('kTime').textContent=fmt(now)+' / '+fmt(buffer?.duration||0);el('kReview').value=String(now);el('kPhrase').textContent=pages.length?'フレーズ '+(view.index+1)+' / '+pages.length:'フレーズ未解析';
  }
