@@ -42,7 +42,7 @@ function selectTab(t) {
 }
 tabs.forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
 $('liveBtn').addEventListener('click', () => { file.pause(); selectTab('live'); });
-$('liveBack').addEventListener('click', () => { liveShown = false; selectTab('file'); });
+$('liveClose').addEventListener('click', () => { liveShown = false; selectTab('file'); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) karaPause(); });
 window.addEventListener('resize', () => { placePill(); file.resize(); });
 

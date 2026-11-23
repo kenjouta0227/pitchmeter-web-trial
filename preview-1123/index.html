@@ -173,8 +173,9 @@
 
 <!-- リアルタイム -->
 <section id="tab-live" class="pane" aria-label="リアルタイム" hidden>
+  <!-- 2026-11-23 閉じるのは右上の ✕（押せる範囲 48px）。動きは前の「分析に戻る」と同じ -->
+  <button class="liveClose" id="liveClose" type="button" aria-label="閉じる（分析に戻る）"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
   <div class="scroll studio-bg">
-    <button class="backlink" id="liveBack" aria-label="分析に戻る"><svg class="ico"><use href="#i-chev"/></svg>分析に戻る</button>
     <span class="eyebrow">REALTIME</span>
     <h1 class="hero live-hero">マイクの声を、<br>その場で映す。</h1>
     <p class="foot muted">有線イヤホンマイクやAirPodsを推奨します。</p>

@@ -272,9 +272,9 @@ body.fs-open #bottomBar{display:none}
 .sbtn .ico.glyph{fill:none}.sbtn .ico.glyph .s{fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}.sbtn .ico.glyph .f{fill:currentColor}
 .live-hero{background:var(--accent);-webkit-background-clip:text;background-clip:text;color:transparent;filter:drop-shadow(0 0 14px rgba(242,133,190,.25))}
 #tab-live .pinned{background:rgba(13,14,17,.92)}
-.meterCard{position:relative;border-radius:16px;padding:10px 6px 6px;background:linear-gradient(180deg,rgba(37,35,42,.85),var(--panel));box-shadow:0 0 0 1px rgba(187,124,232,.35),0 4px 10px rgba(187,124,232,.16),0 6px 16px rgba(0,0,0,.35);transition:box-shadow .35s ease}
-.meterCard::before{content:"";position:absolute;inset:0;border-radius:16px;padding:1px;background:linear-gradient(135deg,rgba(187,124,232,.35),rgba(242,133,190,.35));-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;pointer-events:none;transition:opacity .35s ease}
-.meterCard.on{box-shadow:0 0 0 1px rgba(242,133,190,.6),0 4px 18px rgba(187,124,232,.38),0 6px 16px rgba(0,0,0,.35)}
+.meterCard{position:relative;border-radius:16px;padding:10px 6px 6px;background:linear-gradient(180deg,rgba(37,35,42,.85),var(--panel));box-shadow:0 0 0 1.5px rgba(187,124,232,.35),0 4px 10px rgba(187,124,232,.16),0 6px 16px rgba(0,0,0,.35);transition:box-shadow .35s ease}
+.meterCard::before{content:"";position:absolute;inset:0;border-radius:16px;padding:3px;background:linear-gradient(135deg,rgba(187,124,232,.35),rgba(242,133,190,.35));-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;pointer-events:none;transition:opacity .35s ease}
+.meterCard.on{box-shadow:0 0 0 1.5px rgba(242,133,190,.6),0 4px 18px rgba(187,124,232,.38),0 6px 16px rgba(0,0,0,.35)}
 .meterCard.on::before{background:linear-gradient(135deg,rgba(187,124,232,.75),rgba(242,133,190,.75))}
 .meterHead{display:flex;align-items:center;gap:8px;padding:0 6px 8px}
 .meterCap{font-size:11px;letter-spacing:1px;color:var(--muted);font-weight:500}
@@ -291,3 +291,10 @@ body.fs-open #bottomBar{display:none}
 #tab-live .notice{animation:pmFade .25s ease}
 @keyframes pmFade{from{opacity:0}to{opacity:1}}
 @media (prefers-reduced-motion:reduce){.dot.on::after{animation:none}}
+
+/* 2026-11-23 リアルタイム：枠を太く（上の padding:3px）・閉じるは右上の ✕（押せる範囲 48px） */
+#tab-live .meterCard{padding:12px 8px 8px}
+.liveClose{position:absolute;top:4px;right:6px;z-index:5;width:48px;height:48px;padding:0;border:0;background:none;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text);-webkit-tap-highlight-color:transparent}
+.liveClose svg{width:34px;height:34px;padding:9px;box-sizing:border-box;border-radius:50%;background:rgba(37,35,42,.9);box-shadow:inset 0 0 0 1px var(--border,#48434e)}
+.liveClose:active svg{transform:scale(.92)}
+#tab-live .scroll{padding-right:56px}
