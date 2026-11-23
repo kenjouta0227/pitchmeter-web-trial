@@ -1,0 +1,1697 @@
+<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="robots" content="noindex,nofollow,noarchive"><meta name="referrer" content="no-referrer"><style>[hidden]{display:none!important}</style><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' blob:; worker-src blob:; style-src 'unsafe-inline'; connect-src blob: data:; media-src blob:; img-src blob: data:; base-uri 'none'; form-action 'none'"><script>/* 単一HTML版：カラオケ v17 の Worker を、このファイルの中のデータから作る（外部通信なし）。v17 の処理そのものは変えない。 */
+(function () {
+'use strict';
+const P = window.parent && window.parent.PMA, Real = window.Worker;
+const MAP = { '/separator-worker.js': ['w_sep', true], '/reference-pitch-worker.js': ['w_ref', false] };
+window.Worker = function (url, opts) {
+  const m = MAP[String(url).split('?')[0]]; if (!m || !P) throw new Error('同梱されていないWorkerです: ' + url);
+  const w = new Real(URL.createObjectURL(new Blob([P.textSync(m[0])], { type: 'text/javascript' })), opts);
+  if (m[1]) {
+    const orig = w.postMessage.bind(w);
+    let q = P.karaokeAssets().then((a) => orig({ __pmAssets: a.data }, a.transfer))
+      .catch((e) => { w.dispatchEvent(new ErrorEvent('error', { message: String(e && e.message || e) })); throw e; });
+    w.postMessage = (msg, tr) => { q = q.then(() => orig(msg, tr), () => {}); };
+  }
+  return w;
+};
+window.Worker.prototype = Real.prototype;
+})();
+</script><script>/* 単一HTML版：再生音の 歌声／伴奏 の音量だけを変える（見本バー・採点・声区判定には一切影響しない）。
+   伴奏 = 元の音 − 分離した歌声。出力 = 元の音×伴奏 ＋ 歌声×(歌声−伴奏) ＝ 歌声×歌声音量 ＋ 伴奏×伴奏音量。
+   伴奏のコピーを作らないので、長い曲でもメモリは「歌声（モノラル）1本分」しか増えない。両方100%なら元の音とまったく同じ。 */
+window.__pmMix = {
+  vol: { v: 1, a: 1 }, stems: null, go: null, gx: null, acc: null,
+  lv(k) { const s = !!this.stems, v = this.vol.v, a = this.vol.a; return k === 'o' ? (s ? a : v) : (s ? v - a : 0); },
+  gain(ac, k) { const n = 'g' + k;
+    if (!this[n] || this[n].context !== ac) { this[n] = ac.createGain(); this[n].connect(ac.destination); }
+    this[n].gain.value = this.lv(k); return this[n]; },
+  startAcc(ac, t, o) { this.stopAcc(); if (!this.stems) return; const s = ac.createBufferSource(); s.buffer = this.stems.voc; s.connect(this.gain(ac, 'x')); s.start(t, o || 0); this.acc = s; },
+  stopAcc() { if (this.acc) { try { this.acc.stop(); } catch (e) {} this.acc.disconnect(); this.acc = null; } },
+  set(k, x) { this.vol[k] = x; for (const q of ['o', 'x']) { const g = this['g' + q]; if (g) g.gain.setTargetAtTime(this.lv(q), g.context.currentTime, 0.02); } },
+  setStems(decoded, voc) {
+    this.stems = null; if (!decoded || !voc || voc.length !== decoded.length) return;
+    const vb = new AudioBuffer({ length: decoded.length, numberOfChannels: 1, sampleRate: decoded.sampleRate });
+    vb.copyToChannel(voc, 0); this.stems = { voc: vb };
+  }
+};
+window.__pmSeg = { pos: 0, from: 0, to: null, gate: 0, keep: false, key: '' }; // 再生位置・採点区間（区間採点用）
+</script><style>html.pmb,html.pmb body{background:#111118!important;overflow:hidden}
+html.pmb main{max-width:none!important;padding:0!important;margin:0!important}
+html.pmb main>*:not(#karaokePage){display:none!important}
+html.pmb #karaokePage>*:not(.kStage){display:none!important}
+html.pmb .kStage{background:#24212c!important;border-radius:22px;box-shadow:none!important}
+html.pmb .kStage{aspect-ratio:auto!important;height:100vh!important}
+#pmScore{position:absolute;top:7%;bottom:7%;right:2.2%;width:36%;z-index:5;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2%;background:linear-gradient(160deg,#24212c,#1c1a24);border:1px solid #f285be80;border-radius:22px;box-shadow:0 0 0 1px #ffffff14 inset,0 8px 30px #f285be40;cursor:pointer;font-family:system-ui;line-height:1;overflow:hidden;animation:pmIn .45s cubic-bezier(.2,1.4,.4,1)}
+#pmScore:before{content:'';position:absolute;inset:0;background:linear-gradient(110deg,transparent 30%,#ffffff22 50%,transparent 70%);transform:translateX(-120%);pointer-events:none}
+#pmScore.done:before{animation:pmShine 1s ease-out .05s}
+#pmScore .lbl{font-size:clamp(10px,7vh,18px);font-weight:700;letter-spacing:.42em;color:#f285be}
+#pmScore .num{display:flex;align-items:baseline;gap:.1em}
+#pmScore .n{font-size:clamp(36px,36vh,112px);font-weight:800;letter-spacing:.01em;font-variant-numeric:tabular-nums;background:linear-gradient(90deg,#bb7ce8,#f285be);-webkit-background-clip:text;background-clip:text;color:transparent}
+#pmScore.done .n{animation:pmPop .5s ease-out}
+#pmScore .u{font-size:clamp(14px,11vh,34px);font-weight:700;color:#f7d6e8}
+#pmScore .bar{width:78%;height:clamp(5px,3.2vh,10px);border-radius:999px;background:#ffffff14;overflow:hidden}
+#pmScore .bar i{display:block;height:100%;width:0;border-radius:999px;background:linear-gradient(90deg,#3bc4e0,#a678ff 50%,#f285be)}
+#pmScore.done{box-shadow:0 0 0 1px #ffffff14 inset,0 0 34px #f285be80}
+#pmScore.msg{font-size:15px;color:#f7d6e8;padding:14px 18px;text-align:center}
+@keyframes pmIn{from{opacity:0;transform:scale(.85)}to{opacity:1;transform:scale(1)}}
+@keyframes pmPop{0%{transform:scale(1)}40%{transform:scale(1.12)}100%{transform:scale(1)}}
+@keyframes pmShine{to{transform:translateX(120%)}}
+</style><title>Pitch Meter | カラオケ試作</title><style>
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top left,#683249 0%,transparent 61%),#0d0e11;color:#ececef;font:16px system-ui}main{max-width:520px;margin:auto;padding:20px 16px}.brand{font-size:12px;font-weight:700;letter-spacing:.20em;color:#f285be}h1{font-size:28px;margin:8px 0 18px}section{background:#17171c;border:1px solid #48434e;border-radius:18px;padding:16px;margin:12px 0}button{font:600 14px system-ui;min-height:44px;margin:6px 6px 6px 0;padding:10px 16px;color:#221628;border:1px solid #a16f90;border-radius:10px;background:linear-gradient(90deg,#bb7ce8,#f285be)}button:disabled{opacity:.35}small{display:block;color:#b4b1b9;line-height:1.5}.meter{height:106px;position:relative}.rail{position:absolute;top:55px;left:0;right:0;height:11px;background:linear-gradient(90deg,#3bc4e0,#a678ff,#ff8c6b);border-radius:999px}.dot{position:absolute;top:53px;left:50%;width:15px;height:15px;transform:translateX(-50%);border-radius:50%;background:#fff;border:1px solid #fff4f1;box-shadow:0 0 15px #e34f70}.dot::before{content:'';position:absolute;left:6px;top:-5px;height:23px;width:2px;background:white}.pointer{position:absolute;top:20px;left:50%;width:158px;transform:translateX(-50%);display:flex;gap:6px;justify-content:center;white-space:nowrap;font:600 13px system-ui;align-items:baseline}.pointer #pitch{font-variant-numeric:tabular-nums;min-width:7.8em}.pointer #label{flex:none;width:4.5em;opacity:0;transition:opacity 170ms ease;color:#f7b1d3}.pointer #label.show{opacity:1}.tick{position:absolute;top:72px;width:1px;height:5px;background:#ffffff69}.endpoints{position:absolute;left:0;right:0;top:81px;display:flex;justify-content:space-between;color:#b4b1b9;font-size:11px}#msg{display:block;color:#b4b1b9;margin-top:6px;font-size:13px}#dot{opacity:0;transition:opacity 120ms}#dot.on{opacity:1}@media(prefers-reduced-motion:reduce){.pointer #label,#dot{transition:none}}
+.fixed{position:absolute;top:35px;left:0;right:0;display:flex;justify-content:space-around;font-size:11px;font-weight:700;color:#ececef;opacity:1;transition:opacity 0s linear 170ms}.meter.confident .fixed{opacity:0;transition:none}.pointer{top:10px}meter{display:block;width:100%;height:9px;accent-color:#f285be;margin-top:10px}main{padding:16px;max-width:520px}h1{font-size:32px;line-height:1.48;color:#f285be;background:linear-gradient(90deg,#bb7ce8,#f285be);background-clip:text;-webkit-text-fill-color:transparent;margin:24px 0}.brand{font-size:10px;letter-spacing:3px}.editor{border:0;border-radius:24px;display:grid;gap:12px;margin:18px 0}.stage{position:relative;height:220px;overflow:hidden;border-radius:14px;background:#000;container-type:inline-size}.stage.tall{height:420px}#media{position:absolute;width:100%;height:100%;inset:0;object-fit:contain}.meter{position:absolute;left:5%;right:5%;bottom:5.5%;height:22.05cqw;background:rgba(14,13,18,.78);border-radius:2.25cqw;pointer-events:none;overflow:visible}.rail{top:50.2%;height:2.52cqw}.dot{top:56%;width:3.42cqw;height:3.42cqw;transform:translate(-50%,-50%);box-shadow:0 0 11px #e34f70}.dot::before{left:50%;top:-45%;width:1px;height:190%}.pointer{top:3%;font-size:clamp(11px,2.88cqw,14px)}.fixed{top:26%;font-size:2.34cqw}.tick{top:66%;height:4px}.endpoints{top:73%;font-size:2.1cqw}.disclaimer{position:absolute;bottom:7%;left:6%;right:6%;text-align:center;font-size:1.72cqw}.select{display:block;position:relative;background:linear-gradient(90deg,#bb7ce8,#f285be);color:#221628;padding:12px;border-radius:10px;text-align:center;min-height:49px;font-size:18px;font-weight:600}.select input{position:absolute;inset:0;width:100%;height:100%;opacity:0}.playrow{display:flex;align-items:center;gap:5px}#pos{margin-left:auto}#filename{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#seek{width:100%;accent-color:#f285be}.playrow button,#stop{background:#25232a;color:#ececef}
+#labelsPage{margin-top:9px;border:0;padding:14px}#labelsPage h2{margin:8px 0}#labelsPage .select{margin:12px 0;background:#292632;color:#fbe6f1}#labelsPage small{margin:6px 0}#labelsFileName{overflow-wrap:anywhere;font-size:13px}
+#labelsPage label{display:block}#labelsPage input:not([type=file]),#labelsPage select{padding:7px 6px;color:#fff;font:16px system-ui;background:#24212a;border:1px solid #595361;border-radius:7px;min-width:0;width:100%}
+.tagFields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:12px 0}.tagFields label,.labelNote,.waveHead{font-size:12px}
+#lblTimeline{position:relative;height:154px;margin:5px 14px;touch-action:pan-y;border:1px solid #4b4558;background:#101016;border-radius:8px}
+#lblWave{width:100%;height:100%;display:block;border-radius:8px}
+#labelsPage .lblHandle{touch-action:none;position:absolute;top:0;transform:translateX(-50%);width:40px;padding:3px;margin:0;background:#f6c7dd;color:#241724;max-height:42px;min-height:42px;font-size:11px;border:1px solid #b66d9d}
+#labelsPage #lblEndHandle{top:auto;bottom:0;background:#c8b6f6}.waveHead{display:flex;justify-content:space-between;align-items:center;gap:8px;color:#cfc8d5}.waveHead label{display:flex!important;gap:6px;align-items:center;white-space:nowrap}
+#lblRows{padding:0;list-style:none}#lblRows li{border-left:4px solid var(--tag);background:#211f29;border-radius:7px;margin:6px 0;padding:8px 10px;overflow-wrap:anywhere}#lblRows li strong{color:var(--tag)}#lblRows li button{margin-bottom:0}.labelsMode{max-width:940px}
+#labelsInfo{min-height:1.5em}
+
+#labelsPage #lblTimeline,#labelsPage #lblScrub{touch-action:none;-webkit-touch-callout:none;user-select:none} #lblTimeline.headHeld{outline:2px solid #f6df89}#lblScrub.headHeld #lblScrubHead{width:9px}
+#labelsPage .lblScrollBar{display:flex!important;align-items:center;gap:9px;font-size:12px;margin:3px 14px;color:#cfc8d5;white-space:nowrap}#labelsPage #lblScroll{height:30px;accent-color:#c8b6f6;padding:0;margin:0;touch-action:pan-y}#labelsPage #lblScroll:disabled{opacity:.42}
+#lblScrub{position:relative;min-height:44px;touch-action:pan-y;cursor:pointer;margin:3px 14px 0;outline-offset:2px}
+#lblScrub::before{content:"";position:absolute;left:0;right:0;top:15px;height:12px;background:#4c4658;border-radius:6px}
+#lblScrubHead{position:absolute;top:12px;width:5px;height:19px;background:#f6df89;border-radius:3px;transform:translateX(-50%);pointer-events:none}
+#lblScrubMarks{display:flex;justify-content:space-between;margin:0 14px 7px;font:10px system-ui;color:#c0bacb;pointer-events:none}.cursorLine{color:#f6df89}
+
+#artistCards{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;margin:18px 0}
+.artistCard{padding:16px;border:1px solid #565061;border-radius:20px;background:#1a1821;text-align:left;min-width:0}
+.artistCard h3{font-size:20px;margin:0 0 4px}.artistVoice{font-size:15px;color:#ffcbe5}.artistCard.artistActive{border-color:#c680b0}.artistCard .artistTracks{list-style:none;padding:0;margin:0}.artistTracks button{text-align:left;max-width:100%;overflow-wrap:anywhere;background:#292632;color:#f4e7ef;border-color:#595061}
+#artistEditor{border-top:1px solid #4e4253;margin-top:7px}#manualArtist{border-top:1px solid #4e4253;padding:8px 0}.artistCard .tagFields{grid-template-columns:repeat(auto-fit,minmax(110px,1fr))}
+#artistCards[hidden],#artistDetail[hidden],#manualArtist[hidden]{display:none!important}.artistCard .artistOpen{display:block;width:100%;min-height:100px;text-align:left;margin:0;padding:14px;color:#ececef;background:#201c28;border-color:#605469}.artistOpen strong,.artistOpen span,.artistOpen small{display:block}.artistOpen strong{font-size:20px}.artistOpen .artistVoice{margin:3px 0}.artistCard{padding:0;overflow:hidden}.artistCard .artistTracks{margin:0 14px}.artistCard .artistTracks:empty{display:none}
+#artistDetail button:first-child{min-height:44px}#artistDetailTitle{margin:10px 0}.artistDetailTracks{list-style:none;padding:0}.artistDetailTracks button{background:#292632;color:#f4e7ef;margin:3px;overflow-wrap:anywhere;max-width:100%}#manualArtist #openManualEditor{background:#292632;color:#eee;font-size:12px}
+#labelsPage .lblHandle,#labelsPage #lblEndHandle{top:auto;bottom:-15px;min-height:36px;height:36px;border-radius:4px}#labelsPage #lblTimeline{margin-bottom:20px}
+#lblKinds{margin:12px 0 4px;padding:2px 0;border:0}#lblKinds legend{font-weight:700}#lblKinds div{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}#lblKinds button{padding:3px;margin:0;font-size:12px;background:#292632;color:#f4e7ef;border-color:#595361}#lblKinds button[aria-pressed=true]{background:#f4c5df;color:#271925;border-color:#ffc5df}#lblCommitStatus{color:#b8ebbe;margin-left:6px;font-weight:700}#artistProject summary{cursor:pointer;color:#d8c9db;font-size:13px}
+html.labelsScrolling{overscroll-behavior-y:contain;overscroll-behavior-x:none}
+main.labelsMode{padding-left:max(18px,calc(env(safe-area-inset-left,0px) + 12px));padding-right:max(18px,calc(env(safe-area-inset-right,0px) + 12px))}
+#labelsPage #lblTimeline,#labelsPage #lblScrub,#labelsPage .lblScrollBar{margin-left:max(23px,env(safe-area-inset-left,0px));margin-right:max(23px,env(safe-area-inset-right,0px))}
+#labelsPage #lblTimeline,#labelsPage #lblScrub,#labelsPage .lblHandle,#labelsPage #lblScroll{overscroll-behavior:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+.artistDetailHead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.artistDetailHead h3{min-width:0;overflow-wrap:anywhere}#artistBack{background:#302635;color:#fff;line-height:1;min-width:44px;min-height:44px;font-size:26px;padding:5px 12px;margin:4px 0 0;flex:none}
+.wavePlayback{display:flex;align-items:center;margin:-4px 23px 0}.wavePlayback #lblListen{margin:2px 0 4px;min-width:88px}
+</style><style>
+.modeNav{display:flex;gap:8px;margin-bottom:24px}.modeNav button{flex:1}.modeNav button[aria-pressed=false]{background:#211c29;color:#ddd}#karaokePage .brand{font-size:13px}.kIntro{color:#d1b9d4}.kStage{position:relative;background:radial-gradient(ellipse at 30% 65%,#39203940,#11101540 75%);border-radius:20px;overflow:hidden;width:100%;aspect-ratio:27/8;box-shadow:inset 0 0 0 1px #5b3b5d33}#kCanvas{position:absolute;inset:0;width:100%;height:100%;display:block}#kCount{position:absolute;inset:0;display:grid;place-items:center;font-size:clamp(26px,10vw,48px);color:#ffe7f6;pointer-events:none}.kLegend{display:flex;gap:15px;flex-wrap:wrap;font-size:14px;margin:12px 0;color:#bd88ed}.kLegend strong{color:#ff91c7}#kTime{margin-left:auto;color:#d4c5d4}#kSource{display:block;width:100%;padding:12px;margin:8px 0 16px;font:16px system-ui;background:#211c29;color:#f6e5f3;border:1px solid #82618a;border-radius:10px}#karaokePage a{color:#e5b4ff}.kControls{display:flex}.kControls button{flex:1}#kStatus{font-size:14px;min-height:42px;color:#ddcbdc}#karaokePage small{margin:10px 0;font-size:13px}#karaokePage details{margin:20px 0;line-height:1.7;color:#c9bacb;font-size:14px}#kResult strong{font-size:40px;color:#efb1e3}main{padding-bottom:40px}
+</style>
+<div id="linkGate" role="status" style="max-width:420px;margin:36px auto;padding:16px">専用リンクを確認中です。</div><main hidden><nav class="modeNav" aria-label="画面"><button id="navMaterial">素材分析</button><button id="navKaraoke">リアルタイム</button></nav><div id="meterHome"><div class="brand">PITCH METER</div><h1>声の高さを、<br>なめらかに映す。</h1><label class="primary select">動画・音声を選ぶ<input id="playfile" type="file" accept="audio/*,video/*,image/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.aif,.aiff,.caf,.mp4,.mov,.m4v,.webm,.mkv,.avi,.3gp,.jpg,.jpeg,.png,.heic,.heif,.webp,.gif" aria-label="動画・音声を選ぶ"></label><section class="editor"><div id="filename"></div><small id="importStatus" role="status"></small><div class="stage"><video id="media" playsinline preload="metadata"></video><div id="meter" class="meter"><div class="fixed"><span>地声</span><span>ミックス</span><span>裏声</span></div><div class="rail" aria-hidden="true"></div><div class="tick" style="left:0%"></div><div class="tick" style="left:25%"></div><div class="tick" style="left:50%"></div><div class="tick" style="left:75%"></div><div class="tick" style="left:100%"></div><div id="dot" class="dot" aria-hidden="true"></div><div id="pointer" class="pointer"><output id="pitch">— Hz</output><output id="label"></output></div><div class="endpoints"><span>最低音 mid1E</span><span>最高音 hiD</span></div></div><small class="disclaimer">表示は音の高さに基づく目安です。発声や音域には個人差があります</small></div><div class="playrow"><button id="play" disabled>再生</button><button id="reset" disabled>停止</button><small id="pos">00:00 / 00:00</small></div><input id="seek" type="range" min="0" max="1" value="0" step="0.05" disabled aria-label="再生位置"><div><button id="exportVideo" disabled>動画を書き出す</button><button id="saveVideo" hidden>保存・共有</button><small id="exportStatus" role="status"></small></div></section><button id="mic">マイクを開始</button><button id="stop" disabled>停止</button><meter id="level" min="-80" max="0" value="-80" aria-label="入力レベル"></meter><output id="msg" aria-live="polite">マイク停止中</output><small>非公開のWeb試作。声種は判定が安定したときだけ表示します。素材とマイク音声は端末内で処理し、外部に送信しません。書き出し動画は「保存・共有」から保存できます。</small><button id="toLabels" type="button">歌声の区間ラベル</button></div>
+<section id="labelsPage" hidden aria-labelledby="labelsTitle">
+<div class="brand">PITCH METER / LABELS</div><h2 id="labelsTitle">歌声の区間ラベル</h2>
+<button id="toMeter" type="button">メーターに戻る</button>
+<div id="artistCards" aria-label="アーティスト別サンプル"></div><div id="manualArtist"><button id="openManualEditor" type="button">その他の音源・以前の下書き</button><small id="manualArtistCount"></small><div id="manualEditorMount"></div></div><div id="artistDetail" hidden><div class="artistDetailHead"><h3 id="artistDetailTitle"></h3><button id="artistBack" type="button" aria-label="編集画面を閉じて一覧に戻る">×</button></div><ul id="artistDetailTracks" class="artistDetailTracks"></ul><div id="artistDetailMount"></div></div><div id="artistEditor" hidden><label class="select">音声ファイルを選ぶ<input id="labelFile" type="file" aria-label="音声ファイルを選ぶ"></label>
+<small id="labelsInfo" role="status">音声は端末内だけで処理します。区間は下書き保存されますが、音声は保存されません。</small>
+<div id="labelWorkspace" hidden>
+<div id="labelsFileName"></div><div class="tagFields">
+<label>歌い手ID<input id="lblSinger" autocomplete="off" maxlength="90" placeholder="例：S01"></label>
+<label>歌い手の用途<select id="lblRole"><option>未指定</option><option>判定基準用</option><option>テスト専用</option></select></label>
+<label>伴奏<select id="lblBacking"><option>不明</option><option>なし</option><option>あり</option></select></label>
+<label>今回の用途で利用可<select id="lblAllowed"><option>未確認</option><option>可</option><option>不可</option></select></label>
+</div>
+<div class="waveHead"><strong class="cursorLine">再生位置 <output id="lblCursorTime">00:00.000</output></strong><span>空いている位置をタップ。再生ヘッドは長押しして移動。</span></div><div id="lblScrub" role="slider" tabindex="0" aria-label="再生位置" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"><span id="lblScrubHead" aria-hidden="true"></span></div><div id="lblScrubMarks" aria-hidden="true"><span>00:00.000</span><span></span><span></span><span>00:00.000</span></div>
+<div class="waveHead"><span id="lblDuration">00:00.000</span><label>表示倍率 <select id="lblZoom"><option value="1">全体</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option><option id="lblZoomCustom" value="custom" hidden disabled></option></select></label></div>
+
+<div id="lblTimeline">
+<canvas id="lblWave" aria-label="音声の波形"></canvas>
+<button id="lblStartHandle" class="lblHandle" type="button" aria-label="開始位置。左右キーで調整">開始</button>
+<button id="lblEndHandle" class="lblHandle" type="button" aria-label="終了位置。左右キーで調整">終了</button>
+</div>
+<div class="wavePlayback"><button id="lblListen" type="button">再生</button></div><div class="waveHead"><span id="waveLo">00:00.000</span><span id="waveHi">00:00.000</span></div>
+<label class="lblScrollBar">横スクロール <input id="lblScroll" type="range" min="0" max="0" value="0" step=".001" aria-label="波形の表示位置" disabled></label>
+<small>波形は2本指で拡大・縮小。空いている位置をタップするか、再生位置の黄色い線を長押しして1本指で動かせます。開始・終了は左右にドラッグ。細かい指定は下の秒数で。キー操作は左右で0.01秒、Shift＋左右で0.1秒。</small><fieldset id="lblKinds"><legend>選択区間種別</legend><div><button type="button" data-kind="地声" aria-pressed="true">地声</button><button type="button" data-kind="裏声" aria-pressed="false">裏声</button><button type="button" data-kind="ミックス" aria-pressed="false">ミックスボイス</button><button type="button" data-kind="保留" aria-pressed="false">保留</button></div></fieldset><button id="lblCommit" type="button">選択区間反映</button><output id="lblCommitStatus" role="status"></output>
+<div class="tagFields">
+<label>開始（秒）<input id="lblStart" type="number" inputmode="decimal" min="0" step=".001" value="0"></label>
+<label>終了（秒）<input id="lblEnd" type="number" inputmode="decimal" min="0" step=".001" value="1"></label>
+<label hidden>判定<select id="lblKind"><option>地声</option><option>裏声</option><option>ミックス</option><option>保留</option></select></label>
+</div>
+<label class="labelNote">メモ<input id="lblNote" autocomplete="off" maxlength="400"></label>
+<button id="lblRangeListen" type="button">選択区間を最初から再生</button><button id="lblCancel" type="button" hidden>編集を取り消す</button>
+<audio id="lblPlayer" preload="metadata" playsinline></audio>
+</div>
+<h3><span id="artistLabelCountTitle">追加した区間</span> <span id="lblCount">0</span></h3>
+<ul id="lblRows"></ul></div><details id="artistProject"><summary>プロジェクトの保存・判定設定</summary><small id="lblDraftStatus" role="status">Safariのサイトデータは消えることがあります。下書きはプロジェクトJSONでも保存できます。</small><button id="lblBackup" type="button" disabled>プロジェクトJSONを保存</button><label class="select">プロジェクトJSONを読み込む<input id="lblRestore" type="file" accept="application/json,.json" aria-label="プロジェクトJSONを読み込む"></label><button id="lblCSV" type="button" disabled>全サンプルのCSVを保存・共有</button><h3>メーターの判定基準</h3><small id="lblModelStatus" role="status"></small><small>「判定基準用」かつ「利用可」の裏声・ミックスを初期サンプルに足します。テスト専用と用途未指定は反映しません。地声は2区間以上あると誤表示を抑えるために使用し、メーターに声種ラベルは追加しません。保留はCSVだけに記録します。適用済みの追加分は今回の区間で置き換わります。保存するのは集計値だけです。</small><button id="lblApplyModel" type="button">区間を判定に反映</button><output id="lblApplyStatus" role="status"></output><p>区間の保存とメーター判定への反映は別です。このボタンで全アーティストをまとめて反映します。</p><h4>いまの下書き・反映対象</h4><ul id="lblLearnCoverage"></ul><h4>実際に適用中の追加区間</h4><ul id="lblLearnSnapshot"></ul><button id="lblResetModel" type="button" disabled>初期基準に戻す</button><h3>本番への引き継ぎ</h3><small id="lblHandoffStatus" role="status">前回反映した判定基準だけを書き出します。区間を編集したあとに更新する場合は、先に「区間を判定に反映」を押してください。</small><button id="lblHandoff" type="button" disabled>本番引き継ぎ用データを書き出す</button></details><details id="lblAcousticPanel"><summary>波形・声質・フォルマント分析</summary><p>このタブで選択した利用可の元音声から、保存区間をまとめて分析します。「声質を分析」は表示のみ。「まとめて分析・反映」は、基準用の元録音がそろった場合に使える区間を一度で判定に反映します。履歴だけでは解析できません。</p><p>フォルマント（F1〜F3）は声の共鳴の推定値です。伴奏あり・不明、高い音程、弱い周期性、推定が一致しない区間では表示しません。</p><button id="lblAcoustic" type="button">開いた音声の声質を分析</button><button id="lblAcousticApply" type="button">まとめて分析・反映</button><button id="lblCompare" type="button">倍音とフォルマントを比較</button><button id="lblCancelAcoustic" type="button" hidden>分析を停止</button><small id="lblAcousticStatus" role="status"></small><div id="lblAcousticBody"></div><div id="lblCompareBody" aria-live="polite"></div></details>
+</section><div id="karaokePage" hidden>
+<div class="brand">REALTIME / KARAOKE</div><h1>見本に重ねて、<br>声を描こう。</h1>
+<p class="kIntro">フレーズごとに見本を表示。動く縦メーターに合わせて歌おう。</p>
+<label for="kSource">素材の種類</label><select id="kSource"><option value="mixed">伴奏入り（端末内で歌声を分離）</option><option value="vocals">歌声のみ（分離しない）</option></select><label class="select">写真かファイルから選ぶ<input id="kFile" type="file" accept="audio/*,video/*,image/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.aif,.aiff,.caf,.mp4,.mov,.m4v,.webm,.mkv,.avi,.3gp,.jpg,.jpeg,.png,.heic,.heif,.webp,.gif" aria-label="写真かファイルから選ぶ"></label>
+<small>写真ライブラリからは画面収録などの音声付き動画を、ファイルからは動画やMP3・M4A・WAVなどの音声を選べます。HEVC動画・画面録画・MP3/M4A/WAV/FLAC/OGG/AIFFなどに対応。長さ・サイズの上限はありません（長い曲ほど分離に時間がかかります。目安：曲の長さの半分ほど）。写真は音が無いので使えません。</small>
+<p id="kStatus" role="status" aria-live="polite">素材を選ぶと、音程の見本を作ります。</p>
+<p id="kKey" role="status">キー：未解析</p>
+<div class="kStage"><canvas id="kCanvas" aria-label="見本バーと歌唱一致部分"></canvas><output id="kCount" aria-live="assertive"></output></div>
+<div class="kLegend"><span>━ 見本バー（推定）</span><strong>━ 歌唱一致</strong><span style="color:#ff667d">━ 一致50%未満</span><output id="kTime">0:00 / 0:00</output></div>
+<p id="kPhrase" role="status">フレーズ未解析</p><label for="kReview">停止中の確認位置</label><input id="kReview" type="range" min="0" max="0" step="0.04" value="0" disabled style="width:100%;min-height:44px;accent-color:#f285be" aria-label="フレーズの確認位置"><div class="kControls"><button id="kPlay" disabled>再生</button><button id="kStop" disabled>停止</button><button id="kScore" disabled>採点する</button></div>
+<section id="kResult" hidden aria-live="polite"></section>
+<details><summary>使い方と暫定採点について</summary><p>見本バーはページ内で固定され、縦メーターが左から右へ進みます。右端で次のフレーズへ瞬時に切り替わります。見本バーの末端を通過した時に、そのバー全長の一致割合を一度判定します。差が2半音未満の時間が70%以上なら全長を紫からピンクのグラデーションと淡い光沢に、50%以上70%未満なら従来の一致色に、50%未満で高低の方向が明確なら一続きの赤バーを表示します。赤バーは実唱の代表的なずれの方向へ最低1半音、最大2音（4半音）の範囲で動かします。無発声や方向の根拠が乏しい場合は、見本の色のままです。波形や点々は描きません。ページをまたぐ長音も元のバー全体で判定します。表示と採点は別で、採点は2半音ちょうども減点なしです。フレーズの70%地点で、それまでの見本に対する一致率が70%以上、かつ0.4秒以上の発声を確認できると一度だけ淡いキラキラを表示します（視差効果を減らす設定では省略）。休符を優先し、長い連続部分は最大8秒で区切ります。停止中の確認位置は表示の見直し用で、再生は常に先頭からです。イヤホンを使い、マイクを許可して「再生」。3、2、1の後に素材が流れます。終了後に採点できます。途中停止や画面を離れた回は採点しません。</p><p>Spleeterで端末内分離してから、歌声だけを見本バー・採点基準に使います。再生は元の伴奏入り音声です。初回はモデル等の約90MBを読み込みますが、素材は送信しません。分離は完全ではなく、楽器の漏れや歌声の欠落が残る場合があります。失敗時は混合音を見本に代用しません。iPhone実機は未検証のため、まず短い素材でお試しください。音程検出範囲は約90〜800Hzです。バーは表示用に音程をまとめ、休符・不確実区間を空けます。見本は前後の音と基音・倍音の候補を比較し、誤検出が強く疑われる短い飛びだけ補正します。キーは歌声から自動推定し、確信があるときだけ候補選択の補助に使います。キー外音を一律に移動しません。長音中の80ms以内の隙間は音響候補が残る場合だけ表示をつなぎ、採点には加えません。バーの音名への丸めは表示だけです。実唱のオクターブ抑制とポインターの短い保持は維持します。ライブの持続するオクターブ変化は最大約80msで追従します。利用モデルとライセンスはメーター画面のいちばん下にあります。</p><p>全体を最大±1.5秒の範囲で一度だけ時間移動し、最も一致する位置で暫定採点します。各時点の音程差は上下200セント（2半音）以内なら音程減点なし。超えた分を300セントで最大100点の減点に換算します。時間位置の同点は許容幅を適用する前の音程差で比較し、無音・欠落も従来どおり減点します。基礎点の上限は歌い欠け率で制限します。有効な発声が合計1秒以上・見本の20%以上あり、連続0.4秒以上を確認できた回は22〜27点を一度だけランダム加算し、合計100点を上限にします。同じ回の再採点で加点は変わりません。無音や短いノイズだけには加点しません。歌唱力を評価する正式な点数ではありません。</p><p>素材・マイクは端末内だけで処理します。マイクの生音声は保存せず、練習中の音程値のみメモリに保持します。ページを閉じると消えます。</p></details>
+</div></main><script>/* Browser-local QuickTime/ISO BMFF audio extraction. No file writes, video decode, network or upload. */
+'use strict';
+(function(root){
+const invalid=()=>Error('動画の音声情報を読み取れませんでした。');
+const read=(v,p)=>v.getUint32(p);
+function name(v,p){return String.fromCharCode(v.getUint8(p),v.getUint8(p+1),v.getUint8(p+2),v.getUint8(p+3))}
+function u64(v,p){const n=read(v,p)*4294967296+read(v,p+4);if(!Number.isSafeInteger(n))throw invalid();return n}
+function list(v,start,end){
+ const out=[];
+ for(let p=start;p+8<=end;){
+  let size=read(v,p),head=8;
+  if(size===1){if(p+16>end)throw invalid();size=u64(v,p+8);head=16}
+  else if(size===0)size=end-p;
+  if(size<head||p+size>end)throw invalid();
+  out.push({type:name(v,p+4),p,b:p+head,e:p+size});
+  if(out.length>100000)throw invalid();
+  p+=size;
+ }
+ return out;
+}
+const child=(v,b,key)=>b&&list(v,b.b,b.e).find(x=>x.type===key);
+const get=(v,b,...keys)=>keys.reduce((x,key)=>child(v,x,key),b);
+function inspect(buf){
+ if(buf.byteLength<8)return null;
+ const v=new DataView(buf),u=new Uint8Array(buf);
+ if(!['ftyp','free','wide','skip','uuid','moov','mdat'].includes(name(v,4)))return null;
+ const atoms=list(v,0,v.byteLength),moov=atoms.find(x=>x.type==='moov');
+ if(!moov)return null;
+ const tracks=list(v,moov.b,moov.e).filter(x=>x.type==='trak').map(t=>{
+  const h=get(v,t,'mdia','hdlr');
+  return {...t,handler:h&&h.e-h.b>=12?name(v,h.b+8):''};
+ });
+ return {v,u,moov,tracks,media:atoms.filter(a=>a.type==='mdat'),fragmented:atoms.some(a=>a.type==='moof')};
+}
+function bound(p,length,box){if(!Number.isSafeInteger(p)||length<0||p<box.b||p+length>box.e)throw invalid()}
+function entries(info,track){
+ const {v,media}=info,stbl=get(v,track,'mdia','minf','stbl'),sz=child(v,stbl,'stsz'),sc=child(v,stbl,'stsc');
+ const co=child(v,stbl,'stco')||child(v,stbl,'co64'),sd=child(v,stbl,'stsd');
+ if(info.fragmented||!sz||!sc||!co||!sd||!media.length)throw invalid();
+ bound(sz.b,12,sz);bound(sc.b,8,sc);bound(co.b,8,co);bound(sd.b,8,sd);
+ const fixed=read(v,sz.b+4),samples=read(v,sz.b+8),groups=read(v,sc.b+4),count=read(v,co.b+4),stride=co.type==='co64'?8:4;
+ if(!(samples>0&&groups>0&&groups<=count&&count<=samples))throw invalid();
+ if(!fixed)bound(sz.b+12,samples*4,sz);
+ bound(sc.b+8,groups*12,sc);bound(co.b+8,count*stride,co);
+ const sets=[];
+ for(let i=0;i<groups;i++){
+  const p=sc.b+8+i*12,first=read(v,p),per=read(v,p+4),desc=read(v,p+8);
+  if((i===0?first!==1:first<=sets[i-1].first)||first>count||!per||!desc)throw invalid();
+  sets.push({first,per,desc});
+ }
+ const chunks=[];let si=0,group=0;
+ for(let i=0;i<count;i++){
+  if(sets[group+1]?.first===i+1)group++;
+  const {per,desc}=sets[group],p=co.b+8+i*stride,offset=stride===8?u64(v,p):read(v,p);
+  if(si+per>samples)throw invalid();
+  let len=fixed*per;
+  if(!fixed)for(let j=0;j<per;j++)len+=read(v,sz.b+12+(si+j)*4);
+   // mdat regions are ordered; keep malformed-file lookup bounded at large chunk counts.
+  let lo=0,hi=media.length;
+  while(lo<hi){const mid=(lo+hi)>>1;if(media[mid].b<=offset)lo=mid+1;else hi=mid;}
+  const region=media[lo-1];
+  if(!len||!region||offset+len>region.e)throw invalid();
+  chunks.push({offset,len,p,si,per,desc});si+=per;
+ }
+ if(si!==samples)throw invalid();
+ return {chunks,stride,sd,size:i=>fixed||read(v,sz.b+12+i*4)};
+}
+function putName(v,p,t){for(let i=0;i<4;i++)v.setUint8(p+i,t.charCodeAt(i))}
+function header(v,p,bytes,t){v.setUint32(p,bytes);putName(v,p+4,t)}
+function remux(info){
+ const {v,u,moov,tracks}=info,audio=tracks.filter(t=>t.handler==='soun'),mvhd=child(v,moov,'mvhd');
+ if(!audio.length||!mvhd||audio.length>8)throw invalid();
+ const plans=audio.map(track=>({track,...entries(info,track)}));
+ const bytes=plans.reduce((n,q)=>q.chunks.reduce((a,c)=>a+c.len,n),0),ftyp=24;
+ if(!bytes||bytes>u.length)throw invalid();
+ const movie=8+(mvhd.e-mvhd.p)+plans.reduce((n,{track})=>n+track.e-track.p,0);
+ const out=new Uint8Array(ftyp+movie+8+bytes),d=new DataView(out.buffer);
+ header(d,0,ftyp,'ftyp');putName(d,8,'M4A ');putName(d,16,'isom');putName(d,20,'mp42');
+ header(d,ftyp,movie,'moov');header(d,ftyp+movie,8+bytes,'mdat');
+ let p=ftyp+8,offset=ftyp+movie+8;
+ out.set(u.subarray(mvhd.p,mvhd.e),p);p+=mvhd.e-mvhd.p;
+ for(const {track,chunks,stride} of plans){
+  out.set(u.subarray(track.p,track.e),p);
+  for(const c of chunks){
+   const at=p+c.p-track.p;if(stride===8){d.setUint32(at,0);d.setUint32(at+4,offset)}else d.setUint32(at,offset);
+   out.set(u.subarray(c.offset,c.offset+c.len),offset);offset+=c.len;
+  }
+  p+=track.e-track.p;
+ }
+ return out.buffer;
+}
+function decoderAsc(info,sample){
+ const {v,u}=info;if(sample.type!=='mp4a')throw invalid();
+ bound(sample.b,28,sample);
+ const type=v.getUint16(sample.b+8),base=sample.b+(type===0?28:type===1?44:type===2?64:0);
+ if(base===sample.b||base>sample.e)throw invalid();
+ const esds=list(v,base,sample.e).find(x=>x.type==='esds'||x.type==='wave');
+ const box=esds?.type==='wave'?child(v,esds,'esds'):esds;
+ if(!box)throw invalid();
+ function descriptor(a,b,depth=0){
+  if(depth>4)return null;
+  for(let p=a;p+2<=b;){
+   const t=u[p++];let n=0,done=false;
+   for(let i=0;i<4&&p<b;i++){const x=u[p++];n=n*128+(x&127);if(!(x&128)){done=true;break}}
+   if(!done||p+n>b)return null;
+   if(t===5&&n>=2)return u.subarray(p,p+n);
+   if(t===3&&n>=3){const f=u[p+2];let j=p+3;if(f&128)j+=2;if(f&64)j+=1+(u[j]||0);if(f&32)j+=2;const x=descriptor(j,p+n,depth+1);if(x)return x;}
+   if(t===4&&n>=13){const x=descriptor(p+13,p+n,depth+1);if(x)return x;}
+   p+=n;
+  }
+  return null;
+ }
+ const a=descriptor(box.b+4,box.e);if(!a)throw invalid();
+ const profile=a[0]>>3,fi=((a[0]&7)<<1)|(a[1]>>7),channels=(a[1]>>3)&15;
+ // ADTS stores regular AAC Main/LC/SSR/LTP, not explicit HE-AAC/ALAC or custom layouts.
+ if(profile<1||profile>4||fi>12||channels<1||channels>7)throw invalid();
+ return {profile,fi,channels};
+}
+function timeline(info,t){
+ const {v,moov}=info,mvhd=child(v,moov,'mvhd'),mdhd=get(v,t,'mdia','mdhd'),el=get(v,t,'edts','elst');
+ if(!el)return null;
+ const getScale=h=>{if(!h)throw invalid();const p=h.b+(v.getUint8(h.b)===1?20:12);bound(p,4,h);return read(v,p)};
+ const m=getScale(mvhd),a=getScale(mdhd);bound(el.b,8,el);
+ const count=read(v,el.b+4),ver=v.getUint8(el.b),stride=ver===1?20:12;
+ if(!m||!a||count<1||count>2||ver>1)throw invalid();
+ bound(el.b+8,count*stride,el);
+ let lead=0,clip=null;
+ for(let i=0;i<count;i++){
+  const p=el.b+8+stride*i,q=p+(ver===1?8:4);
+  const dur=ver===1?u64(v,p):read(v,p);
+  const media=ver===1&&v.getInt32(q)!==-1?u64(v,q):ver===1?(read(v,q+4)===4294967295?-1:-2):v.getInt32(q);
+  if(v.getInt16(q+(ver===1?8:4))!==1||v.getInt16(q+(ver===1?10:6))!==0)throw invalid();
+  if(media===-1&&i===0)lead=dur/m;
+  else if(media>=0&&i===count-1)clip={lead,start:media/a,len:dur/m};
+  else throw invalid();
+ }
+ if(!clip||!Number.isFinite(clip.lead+clip.len+clip.start))throw invalid();
+ return clip;
+}
+function adts(info){
+ const {u,v}=info, audio=info.tracks.filter(x=>x.handler==='soun');
+ // Never drop/mix secondary tracks in the emergency AAC path.
+ if(audio.length!==1)throw invalid();
+ const track=audio[0],q=entries(info,track),d=list(v,q.sd.b+8,q.sd.e);
+ if(q.chunks.some(c=>c.desc!==1)||!d[0])throw invalid();
+ const a=decoderAsc(info,d[0]),edit=timeline(info,track);
+ let n=0;
+ for(const {si,per} of q.chunks)for(let j=0;j<per;j++){const s=q.size(si+j);if(s<1||s>8184)throw invalid();n+=s+7}
+ if(!n||n>u.length*2)throw invalid();
+ const out=new Uint8Array(n);let p=0;
+ for(const {offset,si,per} of q.chunks){let pos=offset;
+  for(let j=0;j<per;j++){
+   const k=q.size(si+j),l=k+7;out[p]=255;out[p+1]=241;out[p+2]=((a.profile-1)<<6)|(a.fi<<2)|(a.channels>>2);
+   out[p+3]=((a.channels&3)<<6)|(l>>11);out[p+4]=(l>>3)&255;out[p+5]=((l&7)<<5)|31;out[p+6]=252;
+   out.set(u.subarray(pos,pos+k),p+7);pos+=k;p+=l;
+  }
+ }
+ return {buffer:out.buffer,edit};
+}
+function native(ctx,bytes,timeout){
+ return new Promise((resolve,reject)=>{
+  const timer=setTimeout(()=>reject(Error('音声の読み取りがタイムアウトしました。')),timeout*Math.max(1,(bytes&&bytes.byteLength||0)/2e6));
+  const ok=b=>{clearTimeout(timer);if(b?.length>0&&b.numberOfChannels>0)resolve(b);else reject(invalid())};
+  const no=e=>{clearTimeout(timer);reject(e||invalid())};
+  try{const p=ctx.decodeAudioData(bytes,ok,no);p?.then(ok,no)}catch(e){no(e)}
+ });
+}
+function editDecoded(ctx,b,e){
+ if(!e)return b;
+ const rate=b.sampleRate,lead=Math.round(e.lead*rate),skip=Math.round(e.start*rate),n=Math.round(e.len*rate);
+ if(n<=0||skip>=b.length||n>b.length-skip+2048)throw invalid();
+ const out=ctx.createBuffer(b.numberOfChannels,lead+n,rate);
+ for(let i=0;i<b.numberOfChannels;i++)out.getChannelData(i).set(b.getChannelData(i).subarray(skip,skip+n),lead);
+ return out;
+}
+async function decode(raw,OC,alive=()=>true){
+ const ctx=new OC(1,1,44100);let info=null;
+ try{info=inspect(raw)}catch(_){}
+ const video=info?.tracks.some(t=>t.handler==='vide');
+ if(video&&info.tracks.every(t=>t.handler!=='soun'))throw Error('この動画には音声トラックがありません。音が入っている画面収録を選んでください。');
+ const check=()=>{if(!alive())throw Error('中止しました。')};
+ check();
+ // Extract first for ordinary movie containers: Safari need not parse/decode the video codec at all.
+ if(video){
+  try{const compact=remux(info),b=await native(ctx,compact,12000);check();return b}catch(_){check()}
+  // Try AAC transport independently of the container. Edit-list delay/length remain aligned.
+  try{const alt=adts(info),b=await native(ctx,alt.buffer,12000);check();return editDecoded(ctx,b,alt.edit)}catch(_){check()}
+ }
+ // Last legacy fallback for uncommon non-fragmented sample tables: keep original
+ // bytes and offsets, but hide the video metadata in a disposable copy.
+ if(video&&!info.fragmented){
+  try{
+   const legacy=raw.slice(0),d=new DataView(legacy);
+   for(const t of info.tracks)if(t.handler!=='soun')putName(d,t.p+4,'free');
+   const b=await native(ctx,legacy,12000);check();return b;
+  }catch(_){check()}
+ }
+ try{const b=await native(ctx,raw,20000);check();return b}catch(err){check();if(!video)throw err}
+ throw Error('動画の音声を読み取れませんでした。音声付きのMOV・MP4、またはM4A・WAVをお試しください。');
+}
+root.PMScreenAudio={decode,inspect,remux,adts,editDecoded};
+})(typeof self!=='undefined'?self:globalThis);
+</script><script>/* 単一HTML版：取り込みの形式対応を広げる（パソコン内だけで処理・送信なし）。
+   Chromeが直接読めない AIFF / CAF(PCM) / AVI(MP3・PCM・AAC) の音声だけを、読める形（WAV・MP3・ADTS）に並べ替えてから
+   いつもの読み取り（PMScreenAudio.decode）に渡す。写真・Apple Lossless などは分かりやすい日本語で知らせる。
+   見本・採点・声区判定の計算には触れない。 */
+(function () {
+  'use strict';
+  const SA = window.PMScreenAudio; if (!SA || SA.__pmWide) return; const orig = SA.decode;
+  const E = (m) => { const e = Error(m); e.pm = true; return e; };
+  const FORMATS = '読める形式：MP3・M4A(AAC)・AAC・WAV・FLAC・OGG・OPUS・AIFF・CAF(非圧縮)、動画はMP4・MOV(HEVC/H.264)・M4V・WEBM・MKV・AVI・3GP（音声トラック付き）。';
+  const PHOTO = '写真（JPEG・PNG・HEIC・WEBP・GIF など）には音が入っていないため、カラオケの見本・再生・採点やメーターには使えません。音声付きの動画（画面録画を含む）か音声ファイルを選んでください。';
+  const ALAC = 'Apple Lossless（ALAC）の音声は、このブラウザでは読めません。Apple Musicアプリで曲を選び「ファイル」→「変換」→「AACバージョンを作成」（メニュー名はバージョンにより少し違います）でできたM4Aを選んでください。無料・パソコン内で完結します。サブスク（Apple Music）で保存した保護付きの曲は読めません。';
+  const tag = (u, p) => String.fromCharCode(u[p], u[p + 1], u[p + 2], u[p + 3]);
+  function kind(buf) {
+    const u = new Uint8Array(buf, 0, Math.min(buf.byteLength, 64)); if (u.length < 12) return '';
+    if (u[0] === 0xff && u[1] === 0xd8 && u[2] === 0xff) return 'image';
+    if (u[0] === 0x89 && tag(u, 1).slice(0, 3) === 'PNG') return 'image';
+    if (tag(u, 0) === 'GIF8' || (u[0] === 0x42 && u[1] === 0x4d && u.length > 30 && u[14] >= 12 && u[14] <= 124 && u[15] === 0)) return 'image';
+    if (tag(u, 0) === 'II*\0' || tag(u, 0) === 'MM\0*') return 'image';
+    if (tag(u, 0) === 'RIFF' && tag(u, 8) === 'WEBP') return 'image';
+    if (tag(u, 0) === 'RIFF' && tag(u, 8) === 'AVI ') return 'avi';
+    if (tag(u, 0) === 'FORM' && (tag(u, 8) === 'AIFF' || tag(u, 8) === 'AIFC')) return 'aiff';
+    if (tag(u, 0) === 'caff') return 'caf';
+    if (tag(u, 4) === 'ftyp') { const b = tag(u, 8); if (/^(heic|heix|heim|heis|hevc|hevx|mif1|msf1|avif|avis)$/.test(b)) return 'image'; return 'mp4'; }
+    return '';
+  }
+  function hasAlac(buf) { // moov は先頭か末尾にある。'stsd' の近くに 'alac' があれば ALAC
+    const n = buf.byteLength, W = Math.min(n, 8 << 20);
+    for (const off of [0, Math.max(0, n - W)]) { const u = new Uint8Array(buf, off, Math.min(W, n - off));
+      for (let i = 0; i + 4 <= u.length; i++) if (u[i] === 0x73 && u[i + 1] === 0x74 && u[i + 2] === 0x73 && u[i + 3] === 0x64) { // 'stsd'
+        for (let j = i + 4; j < Math.min(u.length - 4, i + 64); j++) if (tag(u, j) === 'alac') return true; } }
+    return false;
+  }
+  function wav(fmt, ch, rate, bits, data) { // data: Uint8Array（リトルエンディアン済み）
+    const out = new Uint8Array(44 + data.length), v = new DataView(out.buffer), s = (p, t) => { for (let i = 0; i < 4; i++) out[p + i] = t.charCodeAt(i); };
+    s(0, 'RIFF'); v.setUint32(4, Math.min(0xffffffff, 36 + data.length), true); s(8, 'WAVE'); s(12, 'fmt '); v.setUint32(16, 16, true);
+    v.setUint16(20, fmt, true); v.setUint16(22, ch, true); v.setUint32(24, Math.round(rate), true); v.setUint32(28, Math.round(rate) * ch * bits / 8, true);
+    v.setUint16(32, ch * bits / 8, true); v.setUint16(34, bits, true); s(36, 'data'); v.setUint32(40, Math.min(0xffffffff, data.length), true); out.set(data, 44); return out.buffer;
+  }
+  function swapped(src, bytes) { const n = src.length - src.length % bytes, d = new Uint8Array(n);
+    for (let i = 0; i < n; i += bytes) for (let j = 0; j < bytes; j++) d[i + j] = src[i + bytes - 1 - j]; return d; }
+  function ext80(v, p) { const e = v.getUint16(p) & 0x7fff, hi = v.getUint32(p + 2), lo = v.getUint32(p + 6); if (!e && !hi && !lo) return 0;
+    const r = (hi * 4294967296 + lo) * Math.pow(2, e - 16383 - 63); return (v.getUint16(p) & 0x8000) ? -r : r; }
+  function aiff(buf) {
+    const v = new DataView(buf), u = new Uint8Array(buf), aifc = tag(u, 8) === 'AIFC'; let ch = 0, bits = 0, rate = 0, comp = 'NONE', data = null;
+    for (let p = 12; p + 8 <= u.length;) { const t = tag(u, p), sz = v.getUint32(p + 4), b = p + 8;
+      if (t === 'COMM') { ch = v.getInt16(b); bits = v.getInt16(b + 6); rate = ext80(v, b + 8); if (aifc && sz >= 22) comp = tag(u, b + 18); }
+      else if (t === 'SSND') { const off = v.getUint32(b); data = u.subarray(b + 8 + off, Math.min(u.length, b + sz)); }
+      p = b + sz + (sz & 1); }
+    if (!data || !ch || !rate) throw E('AIFFファイルの中身を読み取れませんでした。');
+    comp = comp.toLowerCase();
+    if (comp === 'fl32' || comp === 'fl64') { const by = comp === 'fl32' ? 4 : 8; return wav(3, ch, rate, by * 8, swapped(data, by)); }
+    if (comp !== 'none' && comp !== 'twos' && comp !== 'sowt') throw E('この圧縮形式のAIFF（' + comp + '）は読めません。WAVかM4Aに変換してください。' + FORMATS);
+    const by = Math.ceil(bits / 8);
+    if (by === 1) { const d = new Uint8Array(data.length); for (let i = 0; i < d.length; i++) d[i] = (data[i] + 128) & 255; return wav(1, ch, rate, 8, d); }
+    return wav(1, ch, rate, by * 8, comp === 'sowt' ? data.slice(0, data.length - data.length % by) : swapped(data, by));
+  }
+  function caf(buf) {
+    const v = new DataView(buf), u = new Uint8Array(buf); let d = null, data = null;
+    for (let p = 8; p + 12 <= u.length;) { const t = tag(u, p), hi = v.getInt32(p + 4), lo = v.getUint32(p + 8), b = p + 12;
+      const sz = (hi === -1 && lo === 0xffffffff) ? u.length - b : hi * 4294967296 + lo;
+      if (t === 'desc') d = { rate: v.getFloat64(b), id: tag(u, b + 8), flags: v.getUint32(b + 12), bpp: v.getUint32(b + 16), ch: v.getUint32(b + 24), bits: v.getUint32(b + 28) };
+      else if (t === 'data') data = u.subarray(b + 4, Math.min(u.length, b + sz));
+      if (sz < 0 || !Number.isFinite(sz)) break; p = b + sz; }
+    if (!d || !data) throw E('CAFファイルの中身を読み取れませんでした。');
+    if (d.id === 'alac') throw E(ALAC);
+    if (d.id !== 'lpcm') throw E('このCAF（' + d.id.trim() + '）は読めません。非圧縮(PCM)のCAFか、M4A・WAVを選んでください。' + FORMATS);
+    const by = d.bits / 8, le = !!(d.flags & 2), fl = !!(d.flags & 1);
+    if (by === 1) { const x = new Uint8Array(data.length); for (let i = 0; i < x.length; i++) x[i] = (data[i] + 128) & 255; return wav(1, d.ch, d.rate, 8, x); }
+    return wav(fl ? 3 : 1, d.ch, d.rate, d.bits, le ? data.slice(0, data.length - data.length % by) : swapped(data, by));
+  }
+  function avi(buf) {
+    const v = new DataView(buf), u = new Uint8Array(buf), streams = [], parts = []; let total = 0;
+    function walk(s, e, inMovi) {
+      for (let p = s; p + 8 <= e;) { const t = tag(u, p), sz = v.getUint32(p + 4, true), b = p + 8, end = Math.min(e, b + sz);
+        if (t === 'LIST' || t === 'RIFF') { const lt = tag(u, b); if (lt === 'strl') streams.push({}); walk(b + 4, end, inMovi || lt === 'movi'); }
+        else if (t === 'strh' && streams.length) streams[streams.length - 1].type = tag(u, b);
+        else if (t === 'strf' && streams.length) { const st = streams[streams.length - 1]; if (st.type === 'auds') st.f = { tag: v.getUint16(b, true), ch: v.getUint16(b + 2, true), rate: v.getUint32(b + 4, true), bits: v.getUint16(b + 14, true), extra: sz > 18 ? u.slice(b + 18, b + Math.min(sz, 18 + v.getUint16(b + 16, true))) : null }; }
+        else if (inMovi && t.slice(2) === 'wb') { const idx = parseInt(t.slice(0, 2), 10); const a = streams.findIndex(x => x.type === 'auds'); if (idx === a && end > b) { parts.push(u.subarray(b, end)); total += end - b; } }
+        if (sz === 0 && t !== 'LIST' && t !== 'RIFF' && b >= e) break; p = b + sz + (sz & 1); }
+    }
+    walk(0, u.length, false);
+    const st = streams.find(x => x.type === 'auds'); if (!st || !st.f) throw E('このAVI動画には音声トラックがありません。音が入っている動画を選んでください。');
+    if (!total) throw E('AVI動画の音声を読み取れませんでした。' + FORMATS);
+    const f = st.f;
+    if (f.tag === 0xff && f.extra && f.extra.length >= 2) { // 生AAC → ADTS を付ける
+      const ao = f.extra[0] >> 3, sri = ((f.extra[0] & 7) << 1) | (f.extra[1] >> 7), cc = (f.extra[1] >> 3) & 15, out = new Uint8Array(total + parts.length * 7); let q = 0;
+      for (const x of parts) { const L = x.length + 7; out.set([0xff, 0xf1, ((ao - 1) << 6) | (sri << 2) | (cc >> 2), ((cc & 3) << 6) | (L >> 11), (L >> 3) & 255, ((L & 7) << 5) | 31, 0xfc], q); out.set(x, q + 7); q += L; }
+      return out.buffer; }
+    const all = new Uint8Array(total); let q = 0; for (const x of parts) { all.set(x, q); q += x.length; }
+    if (f.tag === 0x55 || f.tag === 0x50 || f.tag === 0x1610 || f.tag === 0x706d) return all.buffer; // MP3 / ADTS はそのまま
+    if (f.tag === 1 || f.tag === 0xfffe && f.bits % 8 === 0) return wav(1, f.ch, f.rate, f.bits, all);
+    if (f.tag === 3) return wav(3, f.ch, f.rate, f.bits, all);
+    throw E('このAVI動画の音声形式（0x' + f.tag.toString(16) + '）は読めません。MP4などに変換した動画を選んでください。' + FORMATS);
+  }
+  SA.decode = async function (raw, OC, alive) {
+    const k = kind(raw);
+    if (k === 'image') throw E(PHOTO);
+    let src = raw;
+    if (k === 'aiff') src = aiff(raw); else if (k === 'caf') src = caf(raw); else if (k === 'avi') src = avi(raw);
+    else if (k === 'mp4' && hasAlac(raw)) { try { return await orig(raw.slice(0), OC, alive); } catch (e) { if (e && e.message === '中止しました。') throw e; throw E(ALAC); } }
+    try { return await orig(src, OC, alive); }
+    catch (e) {
+      const m = (e && e.message) || ''; if (m === '中止しました。' || e.pm) throw e;
+      if (/音声トラックがありません/.test(m)) throw E(m + '（写真や無音の動画は使えません）');
+      if (/タイムアウト/.test(m)) throw E('音声の読み取りに時間がかかりすぎました。パソコンの空きメモリを増やして（他のアプリやタブを閉じて）もう一度お試しください。');
+      if (/memory|allocation|Array buffer/i.test(m)) throw E('素材が大きすぎてメモリが足りませんでした。他のアプリやタブを閉じるか、素材を短くしてください。');
+      throw E('この素材の音声を読み取れませんでした（壊れている、保護付き、またはこのブラウザが対応していない音声形式の可能性があります）。HEVC（H.265）の動画は、映像ではなく音声部分だけを読むので通常は拡張機能なしで読めます。' + FORMATS);
+    }
+  };
+  SA.__pmWide = true; window.__pmKind = kind;
+})();
+</script><script>
+'use strict';
+const $=id=>document.getElementById(id), N=960,H=640, SR=16000, hann=Array.from({length:N},(_,i)=>.5-.5*Math.cos(2*Math.PI*i/(N-1)));
+let ct, stream, source, anim=0, rev=0, hist=[]; let baked=null;
+function f0(w){const q=new Float64Array(291);let e=0,sum=0;for(let i=0;i<640;i++)e+=w[i]**2;if(e/640<.004**2)return 0;for(let k=1;k<=290;k++){let d=0;for(let i=0;i<640;i++)d+=(w[i]-w[i+k])**2;sum+=d;q[k]=sum?d*k/sum:1}for(let k=14;k<290;k++){if(q[k]>=.15)continue;while(k<290&&q[k+1]<q[k])k++;const den=k<290?q[k-1]-2*q[k]+q[k+1]:0;const lag=k+(Math.abs(den)>1e-12?.5*(q[k-1]-q[k+1])/den:0);const f=SR/lag;return f>90&&f<800?f:0}return 0}
+function feat(w){const f=f0(w);if(!f||f*8>=SR/2)return {f};let e=0;for(const v of w)e+=v*v;if(e/N<.015**2)return {f};let a=[];for(let k=1;k<=8;k++){let re=0,im=0;for(let i=0;i<N;i++){const p=2*Math.PI*i*f*k/SR,s=w[i]*hann[i];re+=s*Math.cos(p);im+=s*Math.sin(p)}a.push(Math.hypot(re,im))}return {f, z:a.slice(1).map(x=>Math.log((x+.005)/(a[0]+.005)))}}
+function classify(z,pitch){if(!baked||!(pitch>0)||!Array.isArray(z)||z.length!==7||!z.every(Number.isFinite))return '';const d=a=>a.reduce((s,x,i)=>s+((z[i]-x)/baked.scales[i])**2,0);const f=d(baked.falsetto),m=d(baked.mix),best=Math.min(f,m);if(baked.chest){const chest=d(baked.chest);if(chest<6&&(best-chest)/(best+chest+1e-9)>.30)return ''}return best<9&&Math.abs(f-m)/(f+m+1e-9)>.3?(f<m?'裏声':'ミックス'):''}
+function display(a){const c=classify(a.z,a.f);hist=c?[...hist,c].slice(-5):[];const midi=a.f?Math.round(69+12*Math.log2(a.f/440)):null;let name='—';if(midi!==null){const prefix=midi<33?'low×2':midi<45?'low':midi<57?'mid1':midi<69?'mid2':midi<81?'hi':midi<93?'hihi':'hihihi';name=prefix+['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'][(midi%12+12)%12];const pos=Math.max(0,Math.min(100,(midi-52)*100/(74-52)));$('dot').style.left=pos+'%';$('pointer').style.left='clamp(79px, '+pos+'%, calc(100% - 79px))';}
+$('dot').classList.toggle('on',!!a.f);$('pitch').textContent=a.f?a.f.toFixed(1)+' Hz '+name:'— Hz';const ok=!!(hist.length===5&&hist.every(s=>s===c));const label=$('label');if(ok)label.textContent=c;label.classList.toggle('show',ok);$('meter').classList.toggle('confident',ok);label.setAttribute('aria-hidden',String(!ok))}
+function halt(){++rev;stopMic();$('stop').disabled=true;hist=[]}
+function stopMic(){cancelAnimationFrame(anim);if(source){source.disconnect();source=null}$('level').value=-80;if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}}
+$('stop').onclick=()=>{halt();display({f:0});$('msg').textContent='マイク停止中';$('mic').disabled=false};
+$('mic').onclick=async()=>{halt();const id=rev,m=$('msg');$('mic').disabled=true;$('stop').disabled=false;m.textContent='マイクの許可を確認中…';try{
+if(!isSecureContext||!navigator.mediaDevices?.getUserMedia)throw Object.assign(Error('この画面はブラウザのマイクに対応していません。ダウンロードしたHTMLをChromeで開いてください。'),{name:'PreviewUnsupported'});
+const AC=window.AudioContext||window.webkitAudioContext;if(!AC)throw Error('このブラウザは音声解析に対応していません。');ct??=new AC();await ct.resume();
+const media=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+if(id!==rev){media.getTracks().forEach(t=>t.stop());return}stream=media;
+const track=media.getAudioTracks()[0];if(!track)throw Object.assign(Error(),{name:'NotFoundError'});
+track.addEventListener('ended',()=>{if(id===rev){halt();$('mic').disabled=false;m.textContent='マイク入力が切断されました。'}});
+await ct.resume();if(id!==rev)return;
+source=ct.createMediaStreamSource(media);const z=ct.createAnalyser();z.fftSize=8192;source.connect(z);
+const a=new Float32Array(z.fftSize),w=new Float32Array(N), step=ct.sampleRate/SR;let last=0,quiet=0;
+m.textContent='マイク接続済み。入力レベルを確認中…';
+function run(t){if(id!==rev)return;if(t-last>=40){last=t;z.getFloatTimeDomainData(a);let energy=0;for(let i=0;i<N;i++){const p=a.length-1-(N-1-i)*step,k=Math.floor(p);w[i]=(a[k]??0)+(p-k)*((a[k+1]??a[k]??0)-(a[k]??0));energy+=w[i]**2}const rms=Math.sqrt(energy/N);$('level').value=Math.max(-80,20*Math.log10(rms||.00001));quiet=rms<.004?quiet+1:0;const f=feat(w);display(f);const state=ct.state!=='running'?'ブラウザの音声処理が停止しています。停止して再開してください。':track.muted?'マイクは接続済みですが、入力がミュートされています。':quiet>=12?'マイク接続済み。音が弱いか、入力がありません。':f.f?'マイク入力中':rms>=.004?'入力あり。音程を判定できませんでした。':'マイク接続済み。入力レベルを確認中…';if(m.textContent!==state)m.textContent=state}anim=requestAnimationFrame(run)}anim=requestAnimationFrame(run)
+}catch(err){if(id!==rev)return;halt();$('mic').disabled=false;const messages={NotAllowedError:'マイクが許可されていません。Safariのサイト権限を確認してください。',NotFoundError:'マイクが見つかりません。',NotReadableError:'マイクを開けません。他のアプリの使用状況を確認してください。',OverconstrainedError:'マイクが必要な入力条件に対応していません。',SecurityError:'このページのマイク利用がブロックされています。'};m.textContent=messages[err.name]||err.message||'マイクを開始できませんでした。'}};
+const player=$('media'),seek=$('seek'),play=$('play'),reset=$('reset');let objectURL=null, playbackSource, videoAnalyser, playbackAnim=0;
+
+let importRevision=0, decoded=null, importState='idle', lastImportReason='', importCache=new Map(), offlinePending=null;
+const importStatus=$('importStatus');
+function setImportReason(x){if(x!==lastImportReason){importStatus.textContent=x;lastImportReason=x}}
+function mp4AudioOnly(buf){
+ const v=new DataView(buf), chars=i=>String.fromCharCode(...new Uint8Array(buf,i,4));
+ function boxes(start,end){const out=[];for(let p=start;p+8<=end;){let n=v.getUint32(p),h=8;if(n===1){if(p+16>end)break;n=v.getUint32(p+8)*4294967296+v.getUint32(p+12);h=16}else if(!n)n=end-p;
+ if(n<h||p+n>end||!Number.isSafeInteger(n))break;out.push({p,body:p+h,end:p+n,type:chars(p+4)});p+=n}return out}
+ const outer=boxes(0,v.byteLength), moov=outer.find(x=>x.type==='moov');
+ if(!outer.some(x=>x.type==='ftyp')||!moov||outer.some(x=>x.type==='moof'))return false;
+ const tracks=[];
+ for(const t of boxes(moov.body,moov.end).filter(x=>x.type==='trak')){
+ const m=boxes(t.body,t.end).find(x=>x.type==='mdia');if(!m)continue;
+ const h=boxes(m.body,m.end).find(x=>x.type==='hdlr');if(h&&h.body+12<=h.end)tracks.push([t,chars(h.body+8)])}
+ if(!tracks.some(x=>x[1]==='soun'))return false;
+ let changed=false;
+ for(const [t,type] of tracks)if(type!=='soun'){v.setUint32(t.p+4,0x66726565);changed=true}
+ return changed
+}
+function prepareImported(f){
+ const id=++importRevision;decoded=null;importCache.clear();hist=[];importState='pending';setImportReason('素材から音声を読み取り中…');
+ if(f.size>160*1024*1024){importState='fallback';setImportReason('再生しながら音声を解析します。');return offlinePending=null}
+ const OC=window.OfflineAudioContext||window.webkitOfflineAudioContext;
+ if(!OC){importState='fallback';setImportReason('再生しながら音声を解析します。');return offlinePending=null}
+ const task=(async()=>{try{
+ const c=new OC(1,1,SR);const original=await f.arrayBuffer();if(id!==importRevision)return;
+ const trimmed=mp4AudioOnly(original);let buffer;
+ try{buffer=await c.decodeAudioData(original)}catch(e){if(!trimmed)throw e;buffer=await c.decodeAudioData(await f.arrayBuffer())}
+ if(id!==importRevision)return;if(!buffer.length||!buffer.numberOfChannels)throw Error();
+ decoded={buffer,channels:Array.from({length:buffer.numberOfChannels},(_,i)=>buffer.getChannelData(i)),rate:buffer.sampleRate};importState='ready';setImportReason('素材の音声を読み取りました。')
+ }catch(_){if(id===importRevision){importState='fallback';setImportReason('再生しながら音声を解析します。')}}})();
+ task.finally(()=>{if(id===importRevision)syncExportEligibility()});
+ return offlinePending=task
+}
+function analyseImported(time, analyser, arr, w){
+ if(decoded){
+ const bucket=Math.max(0,Math.round(time*1000/33));if(importCache.has(bucket))return importCache.get(bucket);
+ const {rate,channels}=decoded,j0=Math.round(bucket*.033*rate-(N-1)*.5*rate/SR),ratio=rate/SR;let best=0,bestChannel=null;
+ for(const ch of channels){let e=0;for(let i=0;i<N;i+=4){const k=Math.floor(j0+i*ratio);e+=(ch[k]??0)**2}if(e>=best){best=e;bestChannel=ch}}
+ for(let i=0;i<N;i++){const j=j0+i*ratio,k=Math.floor(j),x=bestChannel?.[k]??0;w[i]=x+(j-k)*((bestChannel?.[k+1]??0)-x)}
+ const a=withLevel(w);if(importCache.size>8500)importCache.clear();importCache.set(bucket,a);return a
+ }
+ if(!analyser||!ct||player.seeking||!arr)return {f:0,rms:0};
+ analyser.getFloatTimeDomainData(arr);const ratio=ct.sampleRate/SR;
+ for(let i=0;i<N;i++){const j=arr.length-1-(N-1-i)*ratio,k=Math.floor(j);w[i]=(arr[k]??0)+(j-k)*((arr[k+1]??arr[k]??0)-(arr[k]??0))}
+ return withLevel(w)
+}
+function withLevel(w){let e=0;for(const x of w)e+=x*x;const rms=Math.sqrt(e/w.length);return {...feat(w),rms}}
+function describeImported(a){
+ if(importState==='pending'&&!a.rms)return setImportReason('素材から音声を読み取り中…');
+ if(!a.f){
+ if(!a.rms&&importState==='fallback')return setImportReason('この区間の音声を取得できません。無音でない場合は、AAC音声入りのMP4でお試しください。');
+ return setImportReason(a.rms<.004?'この区間は無音または音が小さいため、判定を表示しません。':'この区間の音程を検出できません。')
+ }
+ if(a.rms<.015)return setImportReason('音程は検出しました。声種の判定には音量が足りません。');
+ if(!classify(a.z,a.f))return setImportReason('音程は検出しました。声種が曖昧な区間は表示しません。');
+ setImportReason('素材の音声を解析中')
+}
+function importedGraph(){if(!playbackSource){playbackSource=ct.createMediaElementSource(player);videoAnalyser=ct.createAnalyser();videoAnalyser.fftSize=8192;playbackSource.connect(videoAnalyser);videoAnalyser.connect(ct.destination)}}
+
+const tstr=t=>Number.isFinite(t)?String(Math.floor(t/60)).padStart(2,'0')+':'+String(Math.floor(t%60)).padStart(2,'0'):'00:00';
+function stopPlayback(){cancelAnimationFrame(playbackAnim);if(!player.paused)player.pause()}
+$('playfile').onchange=e=>{const f=e.target.files[0];if(!f)return;if(/^image\//.test(f.type)||/\.(jpe?g|png|heic|heif|webp|gif|bmp|tiff?)$/i.test(f.name)){try{e.target.value=''}catch(_){}$('importStatus').textContent='写真には音が入っていないため、音程の表示には使えません。音声付きの動画か音声ファイルを選んでください。';return}try{e.target.value=''}catch(_){}stopPlayback();halt();prepareImported(f);display({f:0});$('msg').textContent='マイク停止中';$('mic').disabled=false;if(objectURL)URL.revokeObjectURL(objectURL);objectURL=URL.createObjectURL(f);player.src=objectURL;player.load();$('filename').textContent=f.name;play.disabled=reset.disabled=seek.disabled=true};
+player.onloadedmetadata=()=>{play.disabled=reset.disabled=seek.disabled=false;seek.max=player.duration||1;player.parentElement.classList.toggle('tall',player.videoHeight>player.videoWidth)};
+player.ontimeupdate=()=>{seek.value=player.currentTime;$('pos').textContent=tstr(player.currentTime)+' / '+tstr(player.duration)};
+player.onerror=()=>{$('msg').textContent='この形式をSafariで開けません。'};
+player.onpause=()=>{play.textContent='再生';cancelAnimationFrame(playbackAnim);display({f:0})};
+seek.oninput=()=>{hist=[];player.currentTime=Number(seek.value)};
+player.addEventListener('seeked',()=>{if(exportActive||!decoded)return;hist=[];const w=new Float32Array(N);let a;for(let i=4;i>=0;i--){a=analyseImported(Math.max(0,player.currentTime-i*.04),null,null,w);display(a)}describeImported(a)});
+reset.onclick=()=>{stopPlayback();player.currentTime=0;display({f:0})};
+play.onclick=async()=>{if(!player.paused){stopPlayback();return}halt();hist=[];$('mic').disabled=false;$('msg').textContent='マイク停止中';try{
+const AC=window.AudioContext||window.webkitAudioContext;ct??=new AC();const resume=ct.resume();resume.catch(()=>{});
+player.muted=false;if(!decoded)importedGraph();const playing=player.play();await Promise.all([resume,playing]);play.textContent='一時停止';
+const arr=new Float32Array(8192),w=new Float32Array(N);let last=0,desc=0;function tick(t){if(player.paused)return;if(t-last>=40){last=t;
+if(!player.seeking){const a=analyseImported(player.currentTime,videoAnalyser,arr,w);display(a);if(t-desc>=250){desc=t;describeImported(a)}}}
+playbackAnim=requestAnimationFrame(tick)}playbackAnim=requestAnimationFrame(tick);
+}catch(err){setImportReason('再生できません。 '+err.message)}};
+const startMic=$('mic').onclick;$('mic').onclick=()=>{stopPlayback();return startMic()};
+
+const exportBtn=$('exportVideo'), exportStatus=$('exportStatus'), saveBtn=$('saveVideo');
+let exportActive=null, exportResult=null;
+function forgetExport(){if(exportResult){URL.revokeObjectURL(exportResult.url);exportResult=null}saveBtn.hidden=true}
+function syncExportEligibility(){exportBtn.disabled=!!exportActive||importState==='pending'||!Number.isFinite(player.duration)||!player.duration}
+function exportControls(active){for(const el of [$('playfile'),play,reset,seek,$('mic')])el.disabled=active;if(active)exportBtn.disabled=true;else syncExportEligibility()}
+player.addEventListener('loadedmetadata',()=>exportControls(false));
+$('playfile').addEventListener('change',()=>{forgetExport();exportStatus.textContent='';exportBtn.disabled=true});
+function makeExportCanvas(){
+ const video=player.videoWidth>0&&player.videoHeight>0, ratio=video?player.videoWidth/player.videoHeight:16/9;
+ const canvas=document.createElement('canvas');canvas.width=Math.max(2,2*Math.round(720*Math.min(1,ratio)/2));canvas.height=Math.max(2,2*Math.round(720/Math.max(1,ratio)/2));
+ return canvas
+}
+function drawExport(canvas,field){
+ const g=canvas.getContext('2d'), w=canvas.width,h=canvas.height, x=w*.05, y=h-Math.min(h*.32,w*.23)-h*.055, mw=w*.90,mh=h-h*.055-y;
+ const text=(str,u,v,size,color,align='center')=>{g.font='600 '+size+'px system-ui, sans-serif';g.textAlign=align;g.textBaseline='middle';g.fillStyle=color;g.fillText(str,u,v)};
+ const r=(a,b,c,d,k,paint)=>{g.fillStyle=paint;g.beginPath();g.roundRect(a,b,c,d,k);g.fill()};
+ g.fillStyle='#000';g.fillRect(0,0,w,h);if(player.videoWidth&&player.readyState>=2)g.drawImage(player,0,0,w,h);
+ r(x,y,mw,mh,Math.min(w*.018,mh*.14),'rgba(14,13,18,.80)');
+ const cy=y+mh*.55,rh=Math.max(4,Math.min(w*.023,mh*.11)), grad=g.createLinearGradient(x,0,x+mw,0);
+ grad.addColorStop(0,'#3bc4e0');grad.addColorStop(.5,'#a678ff');grad.addColorStop(1,'#ff8c6b');r(x,cy-rh/2,mw,rh,rh/2,grad);
+ g.fillStyle='#ffffff69';for(let i=0;i<=4;i++)g.fillRect(x+mw*i/4,cy+rh,w*.002,mh*.08);
+ const sm=Math.max(7,Math.min(w*.021,mh*.14));
+ text('最低音 mid1E',x+4,y+mh*.85,sm,'#d8d4dc','left');text('最高音 hiD',x+mw-4,y+mh*.85,sm,'#d8d4dc','right');
+ if(!field.opacity){for(const [i,k] of ['地声','ミックス','裏声'].entries())text(k,x+mw*(i+.5)/3,y+mh*.34,sm,'#ececef')}
+ if(field.f){
+ const pos=x+mw*Math.max(0,Math.min(1,(69+12*Math.log2(field.f/440)-52)/22)), radius=Math.min(w*.016,mh*.10), center=Math.max(w*.25,Math.min(w*.75,pos));
+ g.fillStyle='#fff';g.fillRect(pos-1,cy-rh*1.45,2,rh*2.9);g.beginPath();g.arc(pos,cy,radius,0,2*Math.PI);g.fill();
+ const size=Math.max(8,Math.min(w*.027,mh*.17));
+ g.font='600 '+size+'px system-ui, sans-serif';const dw=g.measureText(field.pitch).width+6, lw=g.measureText('ミックス').width;
+ text(field.pitch,center-(dw+lw)/2,y+mh*.13,size,'#fff','left');
+ if(field.opacity){g.globalAlpha=field.opacity;text(field.label,center+(dw-lw)/2,y+mh*.13,size,'#f7b1d3','left');g.globalAlpha=1}
+ }
+}
+function encoderType(){
+ if(typeof MediaRecorder!=='function'||!HTMLCanvasElement.prototype.captureStream)return null;
+ return ['video/mp4;codecs=avc1.42001f,mp4a.40.2','video/mp4','video/webm;codecs=vp8,opus','video/webm'].find(x=>MediaRecorder.isTypeSupported?.(x))||null;
+}
+exportBtn.onclick=async()=>{
+ if(exportActive||!objectURL||!Number.isFinite(player.duration)||player.duration<=0)return;
+ const type=encoderType();if(!type){exportStatus.textContent='このブラウザは音声付き動画の書き出しに対応していません。';return}
+ forgetExport();stopPlayback();halt();hist=[];exportControls(true);exportStatus.textContent='書き出し準備中…';
+ let rec,cap,destination,exportAudio,raf=0,timer=0,started=false,fatal='',completion=false;const chunks=[];
+ const cleanup=()=>{cancelAnimationFrame(raf);clearInterval(timer);player.removeEventListener('ended',finish);player.removeEventListener('error',fail);document.removeEventListener('visibilitychange',visibility);stopPlayback();if(destination){try{exportAudio?.stop();exportAudio?.disconnect()}catch(_){};try{playbackSource?.disconnect(destination)}catch(_){};destination.stream.getTracks().forEach(t=>t.stop())}cap?.getTracks().forEach(t=>t.stop());exportActive=null;exportControls(false)};
+ const fail=()=>end('素材の再生が中断されたため、書き出せませんでした。');
+ const visibility=()=>{if(document.hidden)end('書き出しが中断されました。Safariを開いたまま、もう一度お試しください。')};
+ const finish=()=>{completion=true;end('')};
+ function end(err){if(err)fatal=err;if(started&&rec.state!=='inactive'){rec.stop()}else if(!started){cleanup();exportStatus.textContent=fatal||'書き出せませんでした。'}}
+ exportActive={end};
+ try{
+ const AC=window.AudioContext||window.webkitAudioContext;ct??=new AC();const resumed=ct.resume();resumed.catch(()=>{});
+ player.muted=false;
+ destination=ct.createMediaStreamDestination();
+ if(decoded){exportAudio=ct.createBufferSource();exportAudio.buffer=decoded.buffer;exportAudio.connect(destination)}
+ else {importedGraph();playbackSource.connect(destination)}
+ const canvas=makeExportCanvas();drawExport(canvas,{f:0});cap=canvas.captureStream(30);
+ const both=new MediaStream([...cap.getVideoTracks(),...destination.stream.getAudioTracks()]);let actual=type;
+ for(const option of [type,...['video/mp4','video/webm'].filter(k=>k!==type&&MediaRecorder.isTypeSupported(k))]){
+  try{rec=new MediaRecorder(both,{mimeType:option,videoBitsPerSecond:2500000,audioBitsPerSecond:128000});actual=option;break}catch(_){}
+ }
+ if(!rec||both.getAudioTracks().length!==1||both.getVideoTracks().length!==1)throw Error('音声・映像の書き出し機能を開始できませんでした。');
+ rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
+ rec.onerror=()=>end('動画エンコーダーでエラーが発生しました。');
+ rec.onstop=()=>{cleanup();if(fatal||!completion||!chunks.length){exportStatus.textContent=fatal||'動画が生成されませんでした。';return}
+ const mime=(chunks[0].type||rec.mimeType||actual).split(';')[0], ext=mime==='video/mp4'?'mp4':mime==='video/webm'?'webm':'';
+ if(!ext){exportStatus.textContent='書き出した動画形式を確認できませんでした。';return}
+ const original=$('filename').textContent.replace(/\.[^.]*$/,'').replace(/[/:*?"<>|]/g,'_')||'Pitch Meter';
+ const f=new File(chunks,original+'-ピッチメーター.'+ext,{type:mime});
+ exportResult={file:f,url:URL.createObjectURL(f)};
+ saveBtn.hidden=false;exportStatus.textContent=ext.toUpperCase()+'の書き出しが完了しました。'};
+ player.currentTime=0;player.addEventListener('ended',finish);player.addEventListener('error',fail);document.addEventListener('visibilitychange',visibility);
+ rec.start(1000);started=true;const playing=player.play();await Promise.all([resumed,playing]);if(fatal||!exportActive)return;
+ if(exportAudio)exportAudio.start(0,Math.min(player.currentTime,exportAudio.buffer.duration));
+ const arr=new Float32Array(8192),w=new Float32Array(N),ratio=ct.sampleRate/SR;
+ let last=-Infinity,fadeStart=-Infinity,wasShown=false,label='',field={f:0},lastMedia=player.currentTime,lastActivity=performance.now();
+ timer=setInterval(()=>{if(player.currentTime!==lastMedia){lastMedia=player.currentTime;lastActivity=performance.now()}else if(performance.now()-lastActivity>10000)fail()},1000);
+ function frame(t){if(fatal||completion||!exportActive)return;if(t-last>=33){last=t;const a=analyseImported(player.currentTime,videoAnalyser,arr,w);display(a);const shown=$('label').classList.contains('show');
+ if(shown){label=$('label').textContent;fadeStart=Infinity}else if(wasShown){fadeStart=t}
+ wasShown=shown;field={f:a.f,pitch:$('pitch').textContent,label,opacity:shown?1:Math.max(0,1-(t-fadeStart)/170)};
+ drawExport(canvas,field);exportStatus.textContent='書き出し中 '+tstr(player.currentTime)+' / '+tstr(player.duration)+'。画面を開いたままお待ちください。'}
+ raf=requestAnimationFrame(frame)}raf=requestAnimationFrame(frame);
+ }catch(err){end(err.name==='NotAllowedError'?'再生が許可されませんでした。もう一度書き出しボタンを押してください。':err.message||'書き出しを開始できませんでした。')}
+};
+saveBtn.onclick=async()=>{
+ if(!exportResult)return;const {file,url}=exportResult;
+ if(navigator.canShare?.({files:[file]})){try{await navigator.share({files:[file]});return}catch(e){if(e.name==='AbortError')return}}
+ const a=document.createElement('a');a.href=url;a.download=file.name;document.body.appendChild(a);a.click();a.remove();
+};
+
+
+const labels=$('labelsPage'), meterHome=$('meterHome'), labelPlayer=$('lblPlayer');
+const labelPalette={'地声':'#65daca','裏声':'#f4adff','ミックス':'#ffb680','保留':'#b7afc5'};
+
+const ARTISTS=[
+ {id:'artist:fujiwara-satoshi',name:'Official髭男dism',voice:'藤原聡のサンプル'},
+ {id:'artist:takenaka-yudai',name:'Novelbright',voice:'竹中雄大のサンプル'},
+ {id:'artist:ishihara-shinya',name:'SaucyDog',voice:'石原慎也のサンプル'}
+];
+let activeArtist=null;
+const artistById=id=>ARTISTS.find(x=>x.id===lRoleKey(id||''));
+const sessionAudio=new Map(), knownArtists=new Map();
+function artistCard(id){return $('artistCards').querySelector('[data-artist="'+id+'"]')}
+function artistRows(id){return lrows.filter(r=>(artistById(r.singer)?.id||'manual')===id)}
+function artistTracks(id){
+ const rows=artistRows(id), list=new Map();
+ for(const r of rows){const t=list.get(r.key)||{key:r.key,name:r.name,count:0};t.count++;list.set(r.key,t)}
+ for(const f of knownArtists.values())if(f.artist===id&&!list.has(f.key))list.set(f.key,{...f,count:0});
+ return [...list.values()].sort((a,b)=>a.name.localeCompare(b.name))
+}
+function artistTrackList(list,tracks,id){
+ list.replaceChildren();for(const t of tracks){const line=document.createElement('li'),btn=document.createElement('button');btn.type='button';btn.textContent=t.name+'　'+t.count+'区間';btn.onclick=()=>{
+ if(activeArtist!==id&&!switchArtist(id))return;
+ const audio=sessionAudio.get(t.key);if(audio)openLabelFile(audio);else{linfo('「'+t.name+'」と同じ元ファイルを選び直すと編集を再開できます。');$('labelFile').click()}
+ };line.append(btn);list.append(line)}
+}
+function showArtistCards(){
+ for(const d of ARTISTS){const card=artistCard(d.id);if(!card)continue;const tracks=artistTracks(d.id);
+ card.querySelector('.artistCount').textContent=tracks.length+' 音源・'+artistRows(d.id).length+' 区間'}
+ if(activeArtist)artistTrackList($('artistDetailTracks'),artistTracks(activeArtist),activeArtist);
+ $('manualArtistCount').textContent=artistRows('manual').length+' 区間'
+}
+function switchArtist(id){
+ if(id===activeArtist)return true;
+ ++lrev;lstop();lcancel();lready=null;lf=null;$('labelWorkspace').hidden=true;$('lblCommitStatus').textContent='';
+ try{labelPlayer.removeAttribute('src');labelPlayer.load()}catch(_){}
+ if(lsource){URL.revokeObjectURL(lsource);lsource=''}
+ activeArtist=id;$('toMeter').hidden=!!id;$('artistCards').hidden=!!id;$('manualArtist').hidden=!!id;$('artistDetail').hidden=!id;
+ if(!id){showArtistCards();return true}
+ const artist=artistById(id);$('artistDetailMount').append($('artistEditor'));$('artistEditor').hidden=false;
+ $('artistDetailTitle').textContent=artist?artist.name+' / '+artist.voice:'その他の音源・以前の下書き';
+ $('lblSinger').readOnly=!!artist;$('lblSinger').value=artist?.id||'';
+ $('artistLabelCountTitle').textContent=artist?artist.voice+'の区間':'その他の音源の区間';
+ linfo('利用できる音源を選んで、区間を追加してください。');lrender();$('artistBack').focus();return true
+}
+(function buildArtists(){
+ for(const a of ARTISTS){const card=document.createElement('article');card.dataset.artist=a.id;card.className='artistCard';
+ const button=document.createElement('button');button.type='button';button.className='artistOpen';button.onclick=()=>switchArtist(a.id);
+ const h=document.createElement('strong');h.textContent=a.name;const p=document.createElement('span');p.className='artistVoice';p.textContent=a.voice;
+ const c=document.createElement('small');c.className='artistCount';button.append(h,p,c);card.append(button);$('artistCards').append(card)}
+ $('openManualEditor').onclick=()=>switchArtist('manual');$('artistBack').onclick=()=>switchArtist(null);
+})();
+
+function lkind(kind){$('lblKind').value=kind;for(const btn of $('lblKinds').querySelectorAll('button'))btn.setAttribute('aria-pressed',String(btn.dataset.kind===kind))}
+for(const btn of $('lblKinds').querySelectorAll('button'))btn.onclick=()=>{$('lblCommitStatus').textContent='';lkind(btn.dataset.kind)};
+
+let lf=null, lsource='', lready=null, lrev=0, lrows=[], lseq=0, ledit=0, llow=0,lzoom=1, lstart=0,lend=1, lplay=0, lcsvURL='';
+const lclamp=(n,a,b)=>Math.max(a,Math.min(b,n));
+const lmilliseconds=n=>Math.round(n*1000)/1000;
+function lformat(s){const ms=Math.max(0,Math.round(s*1000));return String(Math.floor(ms/60000)).padStart(2,'0')+':'+String(Math.floor(ms/1000)%60).padStart(2,'0')+'.'+String(ms%1000).padStart(3,'0')}
+function lcell(v){let s=String(v??'');if(/^[\s\u0000-\u001f]*[=+@-]/u.test(s)||/^[\t\r\n]/u.test(s))s="'"+s;return '"'+s.replace(/"/g,'""')+'"'}
+function lcsv(rows){return '\uFEFF歌い手ID,ファイル名,開始,終了,判定,伴奏,今回の用途で利用可,メモ\r\n'+rows.map(r=>[r.singer,r.name,lformat(r.start),lformat(r.end),r.kind,r.backing,r.allowed,r.memo].map(lcell).join(',')).join('\r\n')+'\r\n'}
+function labelMode(on,nav=true){meterHome.hidden=on;labels.hidden=!on;document.querySelector('main').classList.toggle('labelsMode',on);document.documentElement.classList.toggle('labelsScrolling',on);
+ if(on){stopPlayback();halt();$('mic').disabled=false;display({f:0});showArtistCards();requestAnimationFrame(ldraw)}else lstop();
+ if(nav){const url=new URL(location.href);url.pathname=on?'/labels/':'/';url.searchParams.delete('mode');try{history.replaceState(null,'',url.pathname+url.search+url.hash)}catch(_){}}
+}
+$('toLabels').onclick=()=>{if(exportActive)return;labelMode(true)};
+$('toMeter').onclick=()=>labelMode(false);
+function linfo(s){$('labelsInfo').textContent=s}
+function lstop(){life++;cancelAnimationFrame(lplay);labelPlayer.pause();readCursor();$('lblListen').textContent='再生'}
+function lmax(){return lready?.duration||0}
+function lwindow(){return lmax()/lzoom}
+function lset(a,b){const max=lmax();if(!max)return;const min=Math.min(.005,max);lstart=lclamp(lmilliseconds(a),0,Math.max(0,max-min));lend=lclamp(lmilliseconds(b),lstart+min,max);
+ $('lblStart').value=lstart.toFixed(3);$('lblEnd').value=lend.toFixed(3);ldraw()}
+function lwave(buf){
+ const n=Math.min(6400,buf.length), lo=new Float32Array(n),hi=new Float32Array(n), channels=Array.from({length:buf.numberOfChannels},(_,i)=>buf.getChannelData(i));
+ for(let i=0;i<n;i++){const a=Math.floor(i*buf.length/n),b=Math.max(a+1,Math.floor((i+1)*buf.length/n));let m=0,x=0;const step=Math.max(1,Math.ceil((b-a)/160));for(const c of channels)for(let j=a;j<b;j+=step){m=Math.min(m,c[j]);x=Math.max(x,c[j])}lo[i]=m;hi[i]=x}
+ const scale=Math.max(.06,...hi,...lo.map(x=>-x));return {lo,hi,scale}
+}
+function ldraw(){
+ if(!lready||labels.hidden)return;const span=lwindow(), hi=llow+span,c=$('lblWave'),r=c.getBoundingClientRect();if(!r.width||!span)return;
+ const dpr=Math.min(2,window.devicePixelRatio||1),W=Math.round(r.width*dpr),H=Math.round(r.height*dpr);if(c.width!==W)c.width=W;if(c.height!==H)c.height=H;
+ const g=c.getContext('2d');if(!g)return;const x=t=>((t-llow)/span)*W;const k=t=>lclamp(x(t),0,W);
+ g.clearRect(0,0,W,H);g.fillStyle='#101016';g.fillRect(0,0,W,H);
+ for(const row of lrows.filter(v=>v.key===lf?.key)){const a=k(row.start),b=k(row.end);g.globalAlpha=.38;g.fillStyle=labelPalette[row.kind];g.fillRect(a,H*.74,b-a,H*.20)}g.globalAlpha=1;
+ g.fillStyle='rgba(243,160,204,.2)';g.fillRect(k(lstart),0,k(lend)-k(lstart),H);
+ const peaks=lready.peaks;if(peaks){g.fillStyle='#d5baca';const mid=H*.47;for(let i=0;i<W;i++){const n=Math.min(peaks.lo.length-1,Math.floor((llow+i/W*span)/lmax()*peaks.lo.length));g.fillRect(i,mid-peaks.hi[n]/peaks.scale*H*.37,1,Math.max(1,(peaks.hi[n]-peaks.lo[n])/peaks.scale*H*.37))}}
+ for(const [id,t,color] of [['lblStartHandle',lstart,'#ffc3db'],['lblEndHandle',lend,'#c8b6f6']]){const p=k(t);$(id).style.left=(100*p/W)+'%';$(id).setAttribute('aria-description',lformat(t));g.fillStyle=color;g.fillRect(p,0,Math.max(1,dpr),H)}
+ {const p=Math.min(W-1,k(lcursor));g.fillStyle='#f6df89';g.globalAlpha=lcursor>=llow&&lcursor<=hi?1:.5;g.fillRect(p,0,Math.max(1,dpr),H);g.globalAlpha=1}
+ $('waveLo').textContent=lformat(llow);$('waveHi').textContent=lformat(hi)
+}
+function lscroll(){const el=$('lblScroll');el.max=Math.max(0,lmax()-lwindow()).toFixed(3);el.disabled=+el.max<=0;llow=lclamp(llow,0,+el.max);el.value=String(llow)}
+function lcenter(){llow=lclamp((lstart+lend-lwindow())/2,0,Math.max(0,lmax()-lwindow()));lscroll();ldraw()}
+function lcancel(){ledit=0;$('lblCommit').textContent='選択区間反映';$('lblCancel').hidden=true;$('lblNote').value=''}
+$('lblCancel').onclick=lcancel;
+function lrender(){
+ const ul=$('lblRows');ul.replaceChildren();const current=artistRows(activeArtist||'manual');showLearnCoverage();$('lblCount').textContent=current.length;$('lblCSV').disabled=!lrows.length;showArtistCards();
+ for(const row of current){const li=document.createElement('li');li.style.setProperty('--tag',labelPalette[row.kind]);const head=document.createElement('strong');head.textContent=row.kind+' '+lformat(row.start)+' 〜 '+lformat(row.end);const f=document.createElement('small');f.textContent=[row.singer,row.name,row.role,row.backing,row.allowed,row.memo].filter(Boolean).join(' / ');
+ const edit=document.createElement('button');edit.type='button';edit.textContent='編集';edit.disabled=row.key!==lf?.key;
+ edit.onclick=()=>{lstop();ledit=row.id;$('lblSinger').value=row.singer;$('lblBacking').value=row.backing;$('lblAllowed').value=row.allowed;$('lblRole').value=row.role;lkind(row.kind);$('lblNote').value=row.memo;lset(row.start,row.end);lcenter();$('lblCommit').textContent='選択区間反映';$('lblCancel').hidden=false;$('lblStart').focus()};
+ const del=document.createElement('button');del.type='button';del.textContent='削除';del.onclick=()=>{lrows=lrows.filter(r=>r.id!==row.id);if(ledit===row.id)lcancel();lrender();ldraw();lsaveDraft();linfo('区間を1件削除しました。適用済みの基準から除くには初期基準に戻すか、残す区間で反映し直してください。')};
+ li.append(head,f,edit,del);ul.append(li)}
+}
+
+function labelRead(file){if(typeof file.arrayBuffer==='function')return file.arrayBuffer();return new Promise((resolve,reject)=>{const fr=new FileReader();fr.onload=()=>resolve(fr.result);fr.onerror=()=>reject(fr.error);fr.readAsArrayBuffer(file)})}
+function labelType(raw,name){const b=new Uint8Array(raw),s=(p,n)=>String.fromCharCode(...b.subarray(p,p+n));
+ if(s(0,4)==='RIFF'&&s(8,4)==='WAVE')return 'audio/wav';
+ if(s(4,4)==='ftyp')return 'audio/mp4';
+ if(s(0,4)==='fLaC')return 'audio/flac';
+ if(s(0,4)==='FORM'&&['AIFF','AIFC'].includes(s(8,4)))return 'audio/aiff';
+ if(s(0,3)==='ID3'||/\.mp3$/i.test(name))return 'audio/mpeg';
+ if(/\.aac$/i.test(name))return 'audio/aac';return ''
+}
+function labelNativeDuration(el,rev){if(el.readyState>=1&&Number.isFinite(el.duration))return Promise.resolve(el.duration);
+ return new Promise(resolve=>{const finish=()=>{clearTimeout(timer);el.removeEventListener('loadedmetadata',finish);el.removeEventListener('error',finish);resolve(rev===lrev&&Number.isFinite(el.duration)?el.duration:0)};const timer=setTimeout(finish,4200);el.addEventListener('loadedmetadata',finish);el.addEventListener('error',finish)})}
+function labelWebDecode(raw,rate){
+ const OC=window.OfflineAudioContext||window.webkitOfflineAudioContext;if(!OC)return Promise.reject(Error('ブラウザの音声デコーダーを使えません。'));
+ return new Promise((resolve,reject)=>{try{const c=new OC(1,128,rate);const p=c.decodeAudioData(raw.slice(0),resolve,reject);if(p&&typeof p.then==='function')p.then(resolve,reject)}catch(e){reject(e)}})
+}
+function labelPcmWav(raw){
+ if(labelType(raw,'')!=='audio/wav')return null;const d=new DataView(raw),tag=i=>String.fromCharCode(...new Uint8Array(raw,i,4));let fmt=null,data=null;
+ for(let p=12;p+8<=d.byteLength;){const sz=d.getUint32(p+4,true),b=p+8;if(sz>d.byteLength-b)break;const k=tag(p);
+ if(k==='fmt '&&sz>=16){const a=d.getUint16(b,true),sub=a===65534&&sz>=40?d.getUint16(b+24,true):a;fmt={sub,ch:d.getUint16(b+2,true),rate:d.getUint32(b+4,true),align:d.getUint16(b+12,true),bits:d.getUint16(b+14,true)}}
+ if(k==='data')data={b,sz};p=b+sz+(sz%2)}
+ if(!data||!fmt)return null;const {sub,ch,rate,align,bits}=fmt,step=bits/8,n=Math.floor(data.sz/align);
+ if(!(rate>=8000&&rate<=192000&&ch>=1&&ch<=8&&n>=Math.floor(rate*.01)&&Number.isFinite(n)&&align>=step*ch&&n*ch<=24e6&&((sub===1&&[8,16,24,32].includes(bits))||(sub===3&&bits===32))))return null;
+ const out=Array.from({length:ch},()=>new Float32Array(n));
+ for(let i=0;i<n;i++)for(let c=0;c<ch;c++){const p=data.b+i*align+c*step;let x;
+ if(sub===3)x=d.getFloat32(p,true);else if(bits===8)x=(d.getUint8(p)-128)/128;else if(bits===16)x=d.getInt16(p,true)/32768;else if(bits===32)x=d.getInt32(p,true)/2147483648;else{const v=d.getUint8(p)|d.getUint8(p+1)<<8|d.getUint8(p+2)<<16;x=((v<<8)>>8)/8388608}
+ out[c][i]=Number.isFinite(x)?Math.max(-1,Math.min(1,x)):0}
+ return {duration:n/rate,sampleRate:rate,length:n,numberOfChannels:ch,getChannelData:c=>out[c]}
+}
+
+$('labelFile').onchange=async e=>{
+ const f=e.currentTarget?.files?.[0]||e.target?.files?.[0];if(!f)return;
+ const input=e.currentTarget||e.target;try{input.value=''}catch(_){}
+ return openLabelFile(f)
+};
+async function openLabelFile(f){
+ const artist=activeArtist??'manual',id=++lrev;let stage='ファイル';$('lblCommitStatus').textContent='';
+ lstop();lcancel();lready=null;lcursor=0;lqueued=null;lmode='normal';lauditionEnd=0;
+ if(lsource){labelPlayer.removeAttribute('src');labelPlayer.load();URL.revokeObjectURL(lsource);lsource=''}
+ lf=null;$('labelWorkspace').hidden=true;linfo('音声を読み取り中…');lrender();
+ try{
+ if(!f.size)throw Error('このファイルは空です。');
+ if(f.size>160*1024*1024)throw Error('160MB以下の音声ファイルを選んでください。');
+ const raw=await labelRead(f);if(id!==lrev)return;
+ stage='照合';const key=await lhash(raw);if(id!==lrev)return;
+ const tagged=lrows.find(r=>r.key===key);const known=knownArtists.get(key);if((tagged&&(artistById(tagged.singer)?.id||'manual')!==artist)||(known&&known.artist!==artist))throw Error('このファイルは別のサンプル欄に登録済みです。元の欄から開いてください。');
+ stage='音声デコード';const type=labelType(raw,f.name);
+ const mime=type||((f.type==='application/octet-stream'||!f.type)?'':f.type);
+ lsource=URL.createObjectURL(mime&&mime!==f.type?new Blob([raw],{type:mime}):f);labelPlayer.src=lsource;labelPlayer.load();
+ let buf;
+ try{buf=await labelWebDecode(raw,16000)}catch(_){if(id!==lrev)return;try{buf=await labelWebDecode(raw,44100)}catch(_){buf=labelPcmWav(raw)}}
+ if(id!==lrev)return;
+ const duration=buf?.duration||await labelNativeDuration(labelPlayer,id);if(id!==lrev)return;
+ if(!Number.isFinite(duration)||duration<.01)throw Error('Safariでこの音声を開けません。WAV、M4A（AAC）、MP3などをお試しください。');
+ const prior=lrows.find(r=>r.key===key);if(prior&&Math.abs(prior.duration-duration)>.10)throw Error('録音の長さが下書きと一致しません。');
+ lf={key,name:prior?.name||f.name,size:f.size,duration:prior?.duration||duration};sessionAudio.set(key,f);knownArtists.set(key,{key,name:lf.name,artist});$('lblSinger').value=artistById(artist)?.id||prior?.singer||'';$('lblBacking').value=prior?.backing||'不明';$('lblAllowed').value=prior?.allowed||'未確認';$('lblRole').value=prior?.role||'未指定';
+ stage='波形表示';let peaks=null;if(buf)try{peaks=lwave(buf)}catch(_){}
+ lready={duration,peaks,buffer:buf||null};if(prior&&buf)lrefreshRecordFeatures(prior);
+ $('labelWorkspace').hidden=false;$('labelsFileName').textContent=f.name;$('lblDuration').textContent=lformat(duration);$('lblEnd').max=duration;$('lblStart').max=duration;
+ llow=0;lzoom=1;lscroll();lset(0,Math.min(1,duration));zoomDisplay();syncCursor();lrender();
+ linfo(peaks?'区間を選び、判定を付けて「区間を追加」を押してください。':'再生と時刻のラベル付けはできます。この形式の波形・判定への反映にはWAVまたはM4A（AAC）をお試しください。');
+ }catch(err){if(id!==lrev)return;const m=String(err?.message||'');linfo(/^(このファイルは空|このファイルは別|160MB|Safariでこの音声|録音の長さ)/.test(m)?m:'読み込みの「'+stage+'」で問題が起きました。ファイルを選び直すか、WAVまたはM4A（AAC）をお試しください。')}
+};
+$('lblZoom').onchange=e=>{lzoom=Number(e.target.value);lcenter()};
+$('lblScroll').oninput=e=>{llow=Number(e.target.value);ldraw()};
+window.addEventListener('resize',()=>requestAnimationFrame(ldraw));
+function lmove(which,next){$('lblCommitStatus').textContent='';if(which==='start')lset(Math.min(next,lend-.005),lend);else lset(lstart,Math.max(lstart+.005,next))}
+function lhandle(id,which){const el=$(id);let p=null,offset=0;
+ const time=x=>{const r=$('lblTimeline').getBoundingClientRect();return llow+lclamp((x-r.left)/r.width,0,1)*lwindow()};
+ el.addEventListener('pointerdown',e=>{if(!lready||p!==null||e.button!==0||wmulti)return;e.preventDefault();lstop();p=e.pointerId;offset=(which==='start'?lstart:lend)-time(e.clientX);el.setPointerCapture(p)});
+ el.addEventListener('pointermove',e=>{if(e.pointerId===p&&!wmulti)lmove(which,time(e.clientX)+offset)});
+ for(const k of ['pointerup','pointercancel','lostpointercapture'])el.addEventListener(k,e=>{if(e.pointerId===p)p=null});
+ el.onkeydown=e=>{if(!['ArrowLeft','ArrowRight'].includes(e.key)||!lready)return;e.preventDefault();lstop();lmove(which,(which==='start'?lstart:lend)+(e.key==='ArrowRight'?1:-1)*(e.shiftKey?.1:.01))};
+}
+lhandle('lblStartHandle','start');lhandle('lblEndHandle','end');
+function lapplyInputs(){const aa=$('lblStart'),bb=$('lblEnd'),a=aa.valueAsNumber,b=bb.valueAsNumber;if(!Number.isFinite(a)||!Number.isFinite(b)||a<0||b<=a||b>lmax()+.00051){linfo('開始より後、素材の長さ以内の終了時刻を入力してください。');return false}lset(a,b);return true}
+$('lblStart').onchange=$('lblEnd').onchange=()=>{lstop();if(lapplyInputs())lcenter()};
+async function wavePlay(restartRange=false){
+ if(!lready)return;if(!restartRange&&!labelPlayer.paused){lstop();return}
+ if(restartRange){if(!lapplyInputs())return;lstop();lmode='range';lauditionEnd=lend;moveCursor(lstart,true)}
+ else if(lcursor>=lmax()-.001){lmode='normal';moveCursor(0,true)}
+ const rev=lrev,playRev=++life;
+ try{const r=labelPlayer.play();await r;if(playRev!==life)return;if(rev!==lrev||labels.hidden)return lstop();$('lblListen').textContent='一時停止';
+ const tick=()=>{if(labelPlayer.paused||playRev!==life)return;if(lmode==='range'&&labelPlayer.currentTime>=lauditionEnd){lstop();moveCursor(lauditionEnd);lmode='normal';return}readCursor();lplay=requestAnimationFrame(tick)};lplay=requestAnimationFrame(tick)}
+ catch(_){if(playRev===life)linfo('この音声を再生できませんでした。')}
+}
+$('lblListen').onclick=()=>wavePlay();
+$('lblRangeListen').onclick=()=>wavePlay(true);
+labelPlayer.onended=()=>{lstop();lmode='normal';readCursor()};
+let lcursor=0,lqueued=null,life=0,lmode='normal',lauditionEnd=0;
+const scrub=$('lblScrub'),wave=$('lblTimeline');
+function syncCursor(){
+ scrub.setAttribute('aria-valuemax',lmax().toFixed(3));scrub.setAttribute('aria-valuenow',lcursor.toFixed(3));scrub.setAttribute('aria-valuetext',lformat(lcursor));
+ $('lblScrubHead').style.left=(lmax()?lcursor/lmax()*100:0)+'%';$('lblCursorTime').textContent=lformat(lcursor);
+ const marks=$('lblScrubMarks').children;for(let i=0;i<marks.length;i++)marks[i].textContent=lformat(lmax()*i/(marks.length-1))
+}
+function readCursor(){if(lqueued===null&&lready&&Number.isFinite(labelPlayer.currentTime)){lcursor=lclamp(labelPlayer.currentTime,0,lmax());syncCursor();ldraw()}}
+function moveCursor(t, reveal=false){
+ if(!lready)return;lcursor=lclamp(lmilliseconds(t),0,lmax());lqueued=lcursor;
+ try{if(labelPlayer.readyState>=1){labelPlayer.currentTime=lcursor;lqueued=null}}catch(_){}
+ if(reveal&&(lcursor<llow||lcursor>llow+lwindow())){llow=lcursor-lwindow()/2;lscroll()}
+ syncCursor();ldraw()
+}
+labelPlayer.addEventListener('loadedmetadata',()=>{if(lqueued!==null)moveCursor(lqueued)});
+for(const e of ['timeupdate','seeked','pause'])labelPlayer.addEventListener(e,readCursor);
+scrub.onkeydown=e=>{if(!lready)return;const step=e.shiftKey?1:.1;const t={ArrowLeft:lcursor-step,ArrowDown:lcursor-step,ArrowRight:lcursor+step,ArrowUp:lcursor+step,Home:0,End:lmax()}[e.key];if(t===undefined)return;e.preventDefault();lstop();lmode='normal';moveCursor(t,true)};
+const wtouch=new Map();let wmulti=false,wbase=null,wselection=null;
+function zoomDisplay(){
+ const sel=$('lblZoom'), custom=$('lblZoomCustom');const near=[1,2,4,8,16].find(x=>Math.abs(x-lzoom)<.015);
+ if(near){custom.hidden=true;sel.value=String(near)}else{custom.hidden=false;custom.textContent=lzoom.toFixed(1)+'×';sel.value='custom'}
+}
+function pairGeo(r){
+ const [a,b]=Array.from(wtouch.values());return {gap:Math.max(12,Math.hypot(a.x-b.x,a.y-b.y)),frac:lclamp(((a.x+b.x)/2-r.left)/r.width,0,1)}
+}
+wave.addEventListener('pointerdown',e=>{
+ if(e.pointerType!=='touch'||!lready)return;
+ if(!wtouch.size)wselection=[lstart,lend];wtouch.set(e.pointerId,{x:e.clientX,y:e.clientY});
+ if(wtouch.size===2){wmulti=true;cancelWaveHead();const r=wave.getBoundingClientRect(),p=pairGeo(r);wbase={gap:p.gap,zoom:lzoom,anchor:llow+p.frac*lwindow()};if(wselection)lset(...wselection)}
+ if(!e.target.closest?.('.lblHandle'))try{wave.setPointerCapture(e.pointerId)}catch(_){}
+ },true);
+wave.addEventListener('pointermove',e=>{
+ if(!wtouch.has(e.pointerId))return;wtouch.set(e.pointerId,{x:e.clientX,y:e.clientY});if(wtouch.size!==2||!wbase)return;
+ const r=wave.getBoundingClientRect();if(!r.width)return;
+ const p=pairGeo(r);lzoom=lclamp(wbase.zoom*p.gap/wbase.gap,1,16);llow=wbase.anchor-p.frac*lwindow();lscroll();zoomDisplay();ldraw()
+ },true);
+for(const n of ['pointerup','pointercancel','lostpointercapture'])wave.addEventListener(n,e=>{
+ if(!wtouch.delete(e.pointerId))return;wbase=null;if(!wtouch.size){wmulti=false;wselection=null}
+ },true);
+
+
+function installHeadGesture(surface,view,blocked=()=>false){
+ let g=null;
+ const cancel=()=>{if(g)clearTimeout(g.hold);g=null;surface.classList.remove('headHeld')};
+ const at=(x,v)=>v.lo+lclamp((x-v.r.left)/v.r.width,0,1)*v.span;
+ const delta=(p,e)=>Math.hypot(e.clientX-p.x,e.clientY-p.y);
+ surface.addEventListener('pointerdown',e=>{
+ if(!lready||e.button!==0||e.target.closest?.('.lblHandle'))return;
+ if(blocked()||e.isPrimary===false||g){cancel();return}
+ const v=view();if(!v.r.width||!v.span)return;
+ const w=(lcursor-v.lo)/v.span,px=v.r.left+w*v.r.width;
+ const near=w>=0&&w<=1&&Math.abs(e.clientX-px)<=20;
+ const p={id:e.pointerId,x:e.clientX,y:e.clientY,hold:null,armed:false,offset:0};g=p;
+ try{surface.setPointerCapture(e.pointerId)}catch(_){}
+ if(near)p.hold=setTimeout(()=>{if(g!==p||blocked())return;lstop();lmode='normal';p.armed=true;p.offset=lcursor-at(p.x,view());surface.classList.add('headHeld')},300)
+ },true);
+ surface.addEventListener('pointermove',e=>{
+ if(!g||e.pointerId!==g.id)return;if(blocked()){cancel();return}
+ if(!g.armed){if(delta(g,e)>10)cancel();return}
+ if(e.cancelable)e.preventDefault();moveCursor(at(e.clientX,view())+g.offset)
+ },true);
+ surface.addEventListener('pointerup',e=>{
+ if(!g||e.pointerId!==g.id)return;const p=g;cancel();if(blocked()||p.armed||delta(p,e)>10)return;
+ const v=view();if(!v.r.width||!v.span)return;lstop();lmode='normal';moveCursor(at(e.clientX,v),surface===scrub)
+ },true);
+ for(const n of ['pointercancel','lostpointercapture'])surface.addEventListener(n,e=>{if(g?.id===e.pointerId)cancel()},true);
+ surface.addEventListener('contextmenu',e=>{if(g?.armed)e.preventDefault()});
+ return cancel
+}
+const cancelWaveHead=installHeadGesture(wave,()=>({r:wave.getBoundingClientRect(),lo:llow,span:lwindow()}),()=>wmulti);
+installHeadGesture(scrub,()=>({r:scrub.getBoundingClientRect(),lo:0,span:lmax()}));
+// Limit the legacy WebKit gesture fallback to these waveform controls.
+for(const surface of [wave,scrub]){
+ let origin=null;
+ for(const event of ['selectstart','contextmenu'])surface.addEventListener(event,e=>{if(e.cancelable)e.preventDefault()});
+ surface.addEventListener('touchstart',e=>{if(e.touches.length===1)origin={x:e.touches[0].clientX,y:e.touches[0].clientY}},{passive:true});
+ surface.addEventListener('touchmove',e=>{
+ if(!lready||!e.cancelable)return;const t=e.touches[0];
+ if(e.touches.length>1||surface.classList.contains('headHeld')||e.target.closest?.('.lblHandle')||
+   (t&&origin&&Math.abs(t.clientX-origin.x)>Math.max(6,Math.abs(t.clientY-origin.y))))e.preventDefault()
+ },{passive:false});
+ for(const event of ['touchend','touchcancel'])surface.addEventListener(event,e=>{if(!e.touches.length)origin=null},{passive:true})
+}
+
+
+$('lblCommit').onclick=()=>{$('lblCommitStatus').textContent='';if(!lready||!lapplyInputs())return;const singer=artistById(activeArtist)?.id||$('lblSinger').value.trim();if(activeArtist==='manual'&&artistById(singer)){linfo('この歌い手IDは専用サンプル欄で使用してください。');return}if(!singer){linfo('歌い手IDを入力してください。');$('lblSinger').focus();return}
+ const row={id:ledit||++lseq,...lf,singer,start:lstart,end:lend,kind:$('lblKind').value,backing:$('lblBacking').value,allowed:$('lblAllowed').value,role:$('lblRole').value,memo:$('lblNote').value.trim()};
+ const outside=lrows.filter(r=>r.key!==lf.key);try{lcoherent([...outside,row]);if(lrows.length>=lMaxRows&&!ledit)throw Error('このプロジェクトの上限は5,000区間です。')}catch(err){linfo(err.message);return}
+ const i=lrows.findIndex(r=>r.id===row.id);if(i<0)lrows.push(row);else lrows[i]=row;
+ for(const r of lrows)if(r.key===lf.key){r.singer=row.singer;r.backing=row.backing;r.allowed=row.allowed;r.role=row.role}lrefreshRecordFeatures(row);
+ lrows.sort((a,b)=>a.name.localeCompare(b.name)||a.start-b.start);linfo(i<0?'区間を追加しました。':'編集を保存しました。');lcancel();lrender();ldraw();$('lblCommitStatus').textContent=lsaveDraft()?'反映完了':'このタブに反映しました。保存できませんでした。'
+};
+$('lblCSV').onclick=async()=>{if(!lrows.length)return;const file=new File([lcsv(lrows)],'pitch-meter-voice-labels.csv',{type:'text/csv;charset=utf-8'});
+ if(navigator.canShare?.({files:[file]})){try{await navigator.share({files:[file]});return}catch(e){if(e.name==='AbortError')return}}
+ if(lcsvURL)URL.revokeObjectURL(lcsvURL);lcsvURL=URL.createObjectURL(file);const a=document.createElement('a');a.href=lcsvURL;a.download=file.name;document.body.append(a);a.click();a.remove()
+};
+
+
+
+const lDraftKey='pm_label_project_v1', lbRoles=['未指定','判定基準用','テスト専用'], lMaxRows=5000;
+const lRoleKey=s=>s.trim().normalize('NFKC').toLowerCase();
+const lfields=['key','name','size','duration','singer','start','end','kind','backing','allowed','role','memo'];
+function lplain(row){return Object.fromEntries(lfields.map(k=>[k,row[k]]))}
+function lproject(rows=lrows){return {format:'pitch-meter-voice-labels',version:1,rows:rows.map(lplain)}}
+function lcoherent(rows){
+ const singer=new Map(),rec=new Map();
+ for(const r of rows){const id=lRoleKey(r.singer);
+  if(r.role!=='未指定'){const p=singer.get(id);if(p&&p!==r.role)throw Error('同じ歌い手IDに違う用途が設定されています。');singer.set(id,r.role)}
+  const signature=JSON.stringify([r.size,r.duration,id,r.backing,r.allowed,r.role]);const p=rec.get(r.key);
+  if(p&&p!==signature)throw Error('同じ録音の歌い手、用途、許可などの設定が一致しません。');rec.set(r.key,signature);
+ }
+ return rows
+}
+function lvalidProject(data){
+ if(!data||data.format!=='pitch-meter-voice-labels'||data.version!==1||!Array.isArray(data.rows)||data.rows.length>lMaxRows)throw Error('このファイルは対応するプロジェクトJSONではありません。');
+ const rows=data.rows.map(r=>{
+ const t=(s,n)=>typeof s==='string'&&s.length<=n,nn=x=>typeof x==='number'&&Number.isFinite(x);
+ if(!r||!t(r.key,71)||!/^sha256:[0-9a-f]{64}$/.test(r.key)||!t(r.name,512)||!r.name||!t(r.singer,90)||!r.singer.trim()||!t(r.memo,400)||
+  !Number.isInteger(r.size)||r.size<1||r.size>160*1024*1024||!nn(r.duration)||r.duration<.01||!nn(r.start)||!nn(r.end)||r.start<0||r.end<=r.start||r.end>r.duration+.00051||
+  !Object.hasOwn(labelPalette,r.kind)||!['不明','なし','あり'].includes(r.backing)||!['未確認','可','不可'].includes(r.allowed)||!lbRoles.includes(r.role))throw Error('プロジェクト内の区間データが無効です。');
+ return lplain(r)
+ });
+ return lcoherent(rows)
+}
+function lsaveDraft(){
+ const msg=$('lblDraftStatus');
+ let saved=true;try{localStorage.setItem(lDraftKey,JSON.stringify(lproject()));msg.textContent='下書き '+lrows.length+' 区間をこのSafariに保存。サイトデータを消すと失われるので、JSONも保存してください。'}
+ catch(_){saved=false;msg.textContent='Safariに下書きを保存できません。タブを閉じる前にプロジェクトJSONを保存してください。'}
+ $('lblBackup').disabled=!lrows.length;return saved
+}
+function lbootDraft(){
+ try{const raw=localStorage.getItem(lDraftKey);if(!raw)return;
+ const rows=lvalidProject(JSON.parse(raw));lrows=rows.map(r=>({...r,id:++lseq}));$('lblDraftStatus').textContent='下書き '+lrows.length+' 区間を読み込みました。波形・再生・反映には同じ録音を選び直してください。';
+ $('lblBackup').disabled=!lrows.length;lrender()
+ }catch(_){$('lblDraftStatus').textContent='下書きを読み込めませんでした。保存したプロジェクトJSONがあれば読み込めます。'}
+}
+async function lhash(buf){return 'sha256:'+Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',buf)),x=>x.toString(16).padStart(2,'0')).join('')}
+let lbackupURL='';
+async function lsaveBackup(file){
+ if(navigator.canShare?.({files:[file]})){try{await navigator.share({files:[file]});return}catch(e){if(e.name==='AbortError')return}}
+ if(lbackupURL)URL.revokeObjectURL(lbackupURL);lbackupURL=URL.createObjectURL(file);const a=document.createElement('a');a.href=lbackupURL;a.download=file.name;document.body.append(a);a.click();a.remove()
+}
+$('lblBackup').onclick=()=>{if(lrows.length)lsaveBackup(new File([JSON.stringify(lproject(),null,2)],'pitch-meter-label-project.json',{type:'application/json'}))};
+$('lblRestore').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
+ try{if(f.size>8*1024*1024)throw Error('プロジェクトJSONは8MB以下にしてください。');
+ const rows=lvalidProject(JSON.parse(await f.text())), prior=lrows.map(lplain), seen=new Set(prior.map(v=>JSON.stringify(v)));
+ const extra=[];for(const r of rows){const k=JSON.stringify(r);if(!seen.has(k)){extra.push(r);seen.add(k)}}
+ if(prior.length+extra.length>lMaxRows)throw Error('このプロジェクトの上限は5,000区間です。');
+ lcoherent([...prior,...extra]);lrows.push(...extra.map(r=>({...r,id:++lseq})));lrender();ldraw();lsaveDraft();
+ linfo(extra.length+' 区間を復元しました。音声は含まれていません。波形・再生・反映には同じ録音を選び直してください。')
+ }catch(err){linfo(err instanceof SyntaxError?'プロジェクトJSONを読み込めませんでした。':err.message)}
+};
+
+const lmodelKey='pm_label_voice_model_v2';
+const coverageKey='pm_label_coverage_v1', useStatuses=['used','role','permission','hold','original','audioQuality'];
+let appliedGroups=null;
+const statusWords={used:'使用可能',role:'用途が判定基準用でない',permission:'利用可でない',hold:'保留',original:'元音声の再選択・デコードが必要',audioQuality:'有効な音声区間が不足'};
+function learnStatus(r){
+ if(r.role!=='判定基準用')return 'role';if(r.allowed!=='可')return 'permission';if(!learnClasses.includes(r.kind))return 'hold';if(!r.featureKey)return 'original';if(!r.features)return 'audioQuality';return 'used'
+}
+function learnCoverage(rows=lrows){
+ const groups=Object.fromEntries([...ARTISTS.map(a=>a.id),'manual'].map(id=>[id,{counts:Object.fromEntries(useStatuses.map(x=>[x,0])),classes:Object.fromEntries(learnClasses.map(x=>[x,0]))}]));
+ for(const row of rows){const id=artistById(row.singer)?.id||'manual', p=groups[id],status=learnStatus(row);p.counts[status]++;if(status==='used')p.classes[row.kind]++}
+ return groups
+}
+function showLearnCoverage(){
+ const a=$('lblLearnCoverage'), b=$('lblLearnSnapshot');a.replaceChildren();b.replaceChildren();
+ const pending=learnCoverage(), names=[...ARTISTS.map(a=>[a.id,a.name]),['manual','その他']];
+ const line=(out,text)=>{const e=document.createElement('li');e.textContent=text;out.append(e)};
+ for(const [id,name] of names){const p=pending[id], hit=p.counts.used, cls=learnClasses.filter(k=>p.classes[k]).map(k=>k+' '+p.classes[k]).join('・');
+ const excluded=useStatuses.filter(k=>k!=='used'&&p.counts[k]).map(k=>statusWords[k]+' '+p.counts[k]).join('、');
+ line(a,name+'：使用可能 '+hit+'区間'+(cls?'（'+cls+'）':'')+(excluded?' ／ 除外・未準備 '+excluded:''))}
+ if(!appliedTotals){line(b,'まだ判定基準に反映されていません。');return}
+ if(!appliedGroups){line(b,'前回の適用データは声種別の合計だけです。アーティスト別の内訳は次の適用時から表示します。');for(const k of learnClasses)if(appliedTotals[k])line(b,k+' '+appliedTotals[k].n+'区間');return}
+ for(const [id,name] of names){const c=appliedGroups[id];const fields=learnClasses.filter(k=>c?.[k]>0).map(k=>k+' '+c[k]);line(b,name+'：'+(fields.length?fields.join('・'):'0区間'))}
+}
+function saveCoverage(totals){
+ const coverage=learnCoverage();appliedGroups=Object.fromEntries(Object.entries(coverage).map(([id,p])=>[id,p.classes]));
+ try{localStorage.setItem(coverageKey,JSON.stringify({tag:JSON.stringify(totals),groups:appliedGroups}))}catch(_){}
+}
+function loadCoverage(totals){
+ if(!totals)return null;try{const rec=JSON.parse(localStorage.getItem(coverageKey)||'null');
+ if(rec?.tag!==JSON.stringify(totals))return null;
+ const ids=[...ARTISTS.map(a=>a.id),'manual'],groups=rec.groups;
+ if(!groups||Object.keys(groups).length!==ids.length||ids.some(id=>learnClasses.some(k=>!Number.isSafeInteger(groups[id]?.[k])||groups[id][k]<0)))return null;
+ if(learnClasses.some(k=>ids.reduce((s,id)=>s+groups[id][k],0)!==(totals[k]?.n||0)))return null;
+ return groups}catch(_){return null}
+}
+function statusApply(text){$('lblApplyStatus').textContent=text;linfo(text)}
+
+let bakedBaseline=null, appliedTotals=null;
+const learnClasses=['裏声','ミックス','地声'];
+function ltally(rows){
+ const totals={};
+ for(const row of rows){if(learnStatus(row)!=='used')continue;
+ const r=totals[row.kind]??{n:0,s:Array(7).fill(0)};r.n++;for(let i=0;i<7;i++)r.s[i]+=row.features[i];totals[row.kind]=r}
+ return Object.fromEntries(Object.entries(totals).map(([k,{n,s}])=>[k,{n,m:s.map(x=>Math.round(1000*x/n)/1000)}]))
+}
+function lvalidate(t){
+ if(!t||typeof t!=='object'||Array.isArray(t))return null;
+ const keys=Object.keys(t);if(!keys.length||keys.some(k=>!learnClasses.includes(k)))return null;
+ for(const v of Object.values(t))if(!v||!Number.isSafeInteger(v.n)||v.n<1||v.n>10000||!Array.isArray(v.m)||v.m.length!==7||v.m.some(x=>!Number.isFinite(x)||x< -9||x>5))return null;
+ return t
+}
+function lmerged(base,t){
+ if(!base)throw Error("初期声種モデルはこの独立試作に含まれていません。");
+ const merge=(old,k)=>{const row=t?.[k];if(!row)return old.slice();const weight=Math.min(.55,row.n/(row.n+3));return old.map((x,i)=>(1-weight)*x+weight*row.m[i])};
+ return {scales:base.scales.slice(),mix:merge(base.mix,'ミックス'),falsetto:merge(base.falsetto,'裏声'),chest:t?.['地声']?.n>=2?t['地声'].m.slice():null}
+}
+function lshowModel(){
+ const count=Object.values(appliedTotals||{}).reduce((n,v)=>n+v.n,0);
+ $('lblModelStatus').textContent=count?'追加基準を '+count+' 区間から適用中。':'独立試作：初期声種モデルは未移植です。音程解析・区間分析を利用できます。';
+ $('lblResetModel').disabled=!count;$('lblHandoff').disabled=!count;showLearnCoverage();$('lblHandoffStatus').textContent=count?'前回反映した判定基準を書き出せます。区間を編集しても、反映し直すまでこの基準は変わりません。':'先に「区間を判定に反映」を押してください。'
+}
+function levaluateRange(start,end,buf=lready?.buffer){
+if(!buf||end-start<.12)return null;
+ const n=Math.min(72,Math.floor((end-start-.06)/.04)+1),w=new Float32Array(N),sum=Array(7).fill(0),ratio=buf.sampleRate/SR;
+ const channels=Array.from({length:buf.numberOfChannels},(_,i)=>buf.getChannelData(i));let have=0;
+ for(let frame=0;frame<n;frame++){const t=start+.03+(end-start-.06)*(n===1?.5:frame/(n-1)),j0=Math.round(t*buf.sampleRate-(N-1)*ratio/2);
+ let best=0,chosen=null;for(const ch of channels){let e=0;for(let i=0;i<N;i+=4)e+=(ch[Math.floor(j0+i*ratio)]??0)**2;if(e>=best){best=e;chosen=ch}}
+ for(let i=0;i<N;i++){const j=j0+i*ratio,k=Math.floor(j),x=chosen?.[k]??0;w[i]=x+(j-k)*((chosen?.[k+1]??0)-x)}
+ const a=feat(w);if(!a.z||!a.z.every(Number.isFinite))continue;have++;for(let i=0;i<7;i++)sum[i]+=lclamp(a.z[i],-9,5)
+ }
+ return have>=3&&have/n>=.30?sum.map(x=>x/have):null
+}
+function lrefreshRecordFeatures(record){
+ for(const r of lrows)if(r.key===record.key){if(record.role!=='判定基準用'||record.allowed!=='可'||!learnClasses.includes(r.kind)){r.features=null;r.featureKey=null;continue}if(!lready?.buffer){r.features=null;r.featureKey=null;continue}
+ const basis=[r.kind,r.start,r.end].join('|');if(!r.features||r.featureKey!==basis){r.features=levaluateRange(r.start,r.end);r.featureKey=basis}}
+}
+$('lblApplyModel').onclick=()=>{
+ if(!bakedBaseline){statusApply('初期声種モデルは独立試作に未移植です。区間分析・比較を利用してください。');return}const pending=new Set(lrows.filter(r=>r.role==='判定基準用'&&r.allowed==='可'&&learnClasses.includes(r.kind)&&!r.featureKey).map(r=>r.key));if(pending.size){statusApply('波形・判定基準を復元するため、未選択の基準用録音 '+pending.size+' 本を同じ元ファイルで選び直してください。');return}const totals=lvalidate(ltally(lrows));
+ if(!totals||(!totals['裏声']&&!totals['ミックス']&&(totals['地声']?.n||0)<2)){statusApply('「利用可」の裏声・ミックス1区間以上、または地声2区間以上が必要です。0.12秒以上の明瞭な区間を選んでください。');return}
+ appliedTotals=totals;saveCoverage(totals);baked=lmerged(bakedBaseline,totals);hist=[];let local=true;
+ try{localStorage.setItem(lmodelKey,JSON.stringify(totals))}catch(_){local=false}
+ lshowModel();statusApply(local?'反映完了。追加基準をこのSafariに保存し、メーターに適用しました。':'このタブでは適用しました。Safariの保存設定により、再読み込みすると元に戻ります。')
+};
+$('lblResetModel').onclick=()=>{
+ if(!bakedBaseline||!appliedTotals)return;appliedTotals=null;appliedGroups=null;baked=bakedBaseline;hist=[];try{localStorage.removeItem(lmodelKey);localStorage.removeItem(coverageKey)}catch(_){}
+ lshowModel();statusApply('初期サンプルの基準に戻しました。ラベルやCSVの内容は消していません。')
+};
+
+
+function zbMedian(a){if(!a.length)return null;const s=a.slice().sort((x,y)=>x-y);return (s[(s.length-1)>>1]+s[s.length>>1])/2}
+function zbPercent(a,p){if(!a.length)return null;const s=a.slice().sort((x,y)=>x-y);return s[Math.min(s.length-1,Math.floor(p*(s.length-1)))]}
+function zbPeriod(w,f){const lag=Math.round(16000/f);if(!(lag>0&&lag<w.length/2))return 0;let xy=0,xx=0,yy=0;for(let i=lag;i<w.length;i++){const x=w[i],y=w[i-lag];xy+=x*y;xx+=x*x;yy+=y*y}return xy/(Math.sqrt(xx*yy)||1)}
+function zbLpc(w,order){
+ const rate=8000,n=Math.floor((w.length-4)/2),x=new Float64Array(n),r=new Float64Array(order+1),c=new Float64Array(order+1);let prev=0;c[0]=1;
+ for(let i=0;i<n;i++){const j=i*2;const u=(w[j]+4*w[j+1]+6*w[j+2]+4*w[j+3]+w[j+4])/16;x[i]=(u-.95*prev)*(.54-.46*Math.cos(2*Math.PI*i/(n-1)));prev=u}
+ for(let k=0;k<=order;k++)for(let i=k;i<n;i++)r[k]+=x[i]*x[i-k];if(r[0]<1e-9)return null;
+ let e=r[0]*1.0005;for(let m=1;m<=order;m++){let sum=r[m];for(let k=1;k<m;k++)sum+=c[k]*r[m-k];const a=-sum/e;if(Math.abs(a)>=.995)return null;const t=c.slice();for(let k=1;k<m;k++)c[k]=t[k]+a*t[m-k];c[m]=a;e*=1-a*a}
+ const resp=[];for(let hz=150;hz<=3650;hz+=20){let a=0,b=0;for(let k=0;k<=order;k++){const p=2*Math.PI*hz*k/rate;a+=c[k]*Math.cos(p);b+=c[k]*Math.sin(p)}resp.push(-10*Math.log10(a*a+b*b||1e-12))}
+ const peaks=[];for(let i=2;i<resp.length-2;i++){const x=resp[i];if(!(x>resp[i-1]&&x>=resp[i+1]))continue;let l=i,r=i;while(l>0&&resp[l]>x-3)l--;while(r<resp.length-1&&resp[r]>x-3)r++;if((r-l)*20>650||l===0||r===resp.length-1)continue;peaks.push(150+i*20)}
+ return peaks.slice(0,3)
+}
+function zbFormants(w,f,period,backing){
+ if(backing!=='なし'||f<100||f>330||period<.78)return null;
+ const a=zbLpc(w,10),b=zbLpc(w,12);if(!a||!b||a.length!==3||b.length!==3||a.some((x,i)=>Math.abs(x-b[i])>(i?180:120)))return null;
+ const v=a.map((x,i)=>(x+b[i])/2);if(v[0]<200||v[0]>1100||v[1]<700||v[1]>3100||v[2]<1400||v[2]>3650||v[1]-v[0]<200||v[2]-v[1]<220)return null;return v
+}
+
+let acousticRun=0;
+const uiAcoustic=$('lblAcousticStatus'),acousticBody=$('lblAcousticBody');
+const dbfs=x=>20*Math.log10(Math.max(.00001,x));
+async function zbDecode(f){const raw=await labelRead(f);try{return await labelWebDecode(raw,16000)}catch(_){try{return await labelWebDecode(raw,44100)}catch(_){return labelPcmWav(raw)}}}
+function zbRange(buf,r){
+ const n=Math.max(3,Math.min(22,Math.floor((r.end-r.start)/.055))), w=new Float32Array(N),rate=buf.sampleRate,step=rate/SR;
+ const channels=Array.from({length:buf.numberOfChannels},(_,i)=>buf.getChannelData(i));
+ const rms=[],hz=[],period=[],harm=Array.from({length:7},()=>[]),form=Array.from({length:3},()=>[]);let peak=0;
+ for(let frame=0;frame<n;frame++){
+  const t=r.start+(r.end-r.start)*(frame+.5)/n;
+  const start=Math.max(0,Math.round(Math.max(r.start,Math.min(r.end-.06,t-.03))*rate)),endSample=r.end*rate;let best=-1,ch=null;
+  for(const c of channels){let e=0;for(let i=0;i<N;i+=8){const k=Math.floor(start+i*step);if(k<endSample)e+=(c[k]??0)**2}if(e>best){best=e;ch=c}}
+  let energy=0;
+  for(let i=0;i<N;i++){const ix=start+i*step,k=Math.floor(ix),a=k<endSample?(ch?.[k]??0):0,b=k+1<endSample?(ch?.[k+1]??a):0;const x=a+(ix-k)*(b-a);w[i]=x;energy+=x*x;peak=Math.max(peak,Math.abs(x))}
+  rms.push(dbfs(Math.sqrt(energy/N)));
+  if(r.end-r.start<.12)continue;const a=feat(w);if(!a.f)continue;
+  const q=zbPeriod(w,a.f);hz.push(a.f);period.push(q);
+  if(a.z&&q>.62)for(let i=0;i<7;i++)harm[i].push(a.z[i]*20/Math.LN10);
+  const f=zbFormants(w,a.f,q,r.backing);if(f)for(let k=0;k<3;k++)form[k].push(f[k])
+ }
+ return {row:r,n,rms,hz,period,harm,form,peak:dbfs(peak)}
+}
+function zbStats(rows){const m=k=>rows.flatMap(a=>a[k]),med=k=>zbMedian(m(k));
+ const round=(n,d=0)=>n===null?'—':n.toFixed(d);
+ const f=Array.from({length:3},(_,i)=>round(zbMedian(rows.flatMap(a=>a.form[i]))));
+ const h=Array.from({length:7},(_,i)=>round(zbMedian(rows.flatMap(a=>a.harm[i])),1));
+ const frames=rows.reduce((n,r)=>n+r.n,0),pitch=m('hz'),vol=m('rms');
+ return ['区間 '+rows.length+'／観測 '+frames+'窓、有声音程 '+pitch.length+'/'+frames,
+         '波形音量 RMS 中央 '+round(med('rms'),1)+' dBFS、10〜90% '+round(zbPercent(vol,.1),1)+'〜'+round(zbPercent(vol,.9),1)+' dBFS、観測ピーク '+round(Math.max(...rows.map(a=>a.peak)),1)+' dBFS',
+         '音程中央値 '+round(med('hz'))+' Hz、周期性中央値 '+round(med('period'),2),
+         'H2〜H8（H1比・dB） '+h.join(' / '),
+         'F1〜F3推定（Hz） '+f.join(' / ')+'、採用 '+rows.reduce((n,a)=>n+a.form[0].length,0)+'/'+frames+'窓（有声 '+pitch.length+'窓）']
+}
+
+const cvClasses=['地声','裏声','ミックス'], cvNone='保留・判定なし';
+const cvId=r=>lRoleKey(r.singer);
+function cvEqual(rows,features){
+ const ids=new Map();for(const x of rows){const id=cvId(x.row),v=x[features];if(!v)continue;const list=ids.get(id)||[];list.push(v);ids.set(id,list)}
+ const out=[...ids.values()].map(list=>list[0].map((_,i)=>zbMedian(list.map(v=>v[i]))));return out
+}
+function cvVector(s){
+ const harmonics=s.harm[0].length>=3&&s.harm[0].length/s.n>=.30 ? s.harm.map(zbMedian):null;
+ const formants=s.form[0].length>=3&&s.form[0].length/s.n>=.25?s.form.map(v=>Math.log(zbMedian(v))):null;
+ return {row:s.row,harmonics,formants}
+}
+function cvFit(rows){
+ const grouped=Object.fromEntries(cvClasses.map(k=>[k,rows.filter(s=>s.row.kind===k)]));
+ const H=Object.fromEntries(cvClasses.map(k=>[k,cvEqual(grouped[k],'harmonics')]));
+ if(cvClasses.some(k=>H[k].length<2))return null;
+ const F=Object.fromEntries(cvClasses.map(k=>[k,cvEqual(grouped[k],'formants')]));
+ const form=cvClasses.every(k=>F[k].length>=2);
+ const all=Object.values(H).flat(), fc=form?Object.values(F).flat():[];
+ const center=points=>points[0].map((_,i)=>zbMedian(points.map(x=>x[i])));
+ const scale=(points,floor)=>center(points).map((c,i)=>Math.max(floor,1.4826*zbMedian(points.map(x=>Math.abs(x[i]-c)))));
+ return {H:Object.fromEntries(cvClasses.map(k=>[k,center(H[k])])),hs:scale(all,5),
+       F:form?Object.fromEntries(cvClasses.map(k=>[k,center(F[k])])):null,fs:form?scale(fc,.20):null};
+}
+function cvPredict(model,target,useFormants){
+ const dist=(s,c,z)=>s.reduce((a,b,i)=>a+((b-c[i])/z[i])**2,0)/s.length;
+ const h=target.harmonics;if(!h)return cvNone;
+ const use=useFormants&&model.F&&target.formants;
+ const scores=cvClasses.map(k=>{const d=dist(h,model.H[k],model.hs);
+  return [k,use?(d+.25*dist(target.formants,model.F[k],model.fs))/1.25:d]}).sort((a,b)=>a[1]-b[1]);
+ const x=scores[0][1],y=scores[1][1];return x<=4&&(y-x)/(y+x+1e-9)>=.20?scores[0][0]:cvNone
+}
+function cvBuild(samples){
+ // Pair every evaluation row with a fit which has never seen that singer.
+ const all=samples.map(cvVector).filter(x=>cvClasses.includes(x.row.kind)&&['判定基準用','テスト専用'].includes(x.row.role)&&x.row.allowed==='可');
+ const cal=all.filter(x=>x.row.role==='判定基準用'),held=all.filter(x=>x.row.role==='テスト専用'),heldIDs=new Set(held.map(x=>cvId(x.row)));
+ const result={scheme:held.length?'宣言済みテスト専用の歌い手':'歌い手丸ごとの交差検証',predictions:[],unsupported:[],total:0,trainers:0};
+ const train=cal.filter(x=>!heldIDs.has(cvId(x.row)));result.trainers=new Set(train.map(x=>cvId(x.row))).size;
+ const evalRows=held.length?held:cal;result.total=evalRows.length;
+ for(const id of new Set(evalRows.map(x=>cvId(x.row)))){
+  const fitted=cvFit(train.filter(x=>cvId(x.row)!==id)), cohort=evalRows.filter(x=>cvId(x.row)===id);
+  if(!fitted){result.unsupported.push({id,n:cohort.length});continue}
+  for(const x of cohort)result.predictions.push({id,truth:x.row.kind,a:cvPredict(fitted,x,false),b:cvPredict(fitted,x,true),form:!!(fitted.F&&x.formants&&x.harmonics)})
+ }
+ return result
+}
+function cvMetrics(rows,key){
+ const by=new Map(),matrix=Object.fromEntries(cvClasses.map(k=>[k,Object.fromEntries([...cvClasses,cvNone].map(p=>[p,0]))]));
+ for(const p of rows){matrix[p.truth][p[key]]++;const s=by.get(p.id)||[];s.push(p);by.set(p.id,s)}
+ const avg=(x)=>x.length?x.reduce((a,b)=>a+b,0)/x.length:null;
+ const per=[...by.entries()].map(([id,r])=>{
+ const coverage=r.filter(x=>x[key]!==cvNone).length/r.length,correct=r.filter(x=>x[key]===x.truth).length/r.length;
+ const f1=avg(cvClasses.filter(k=>r.some(x=>x.truth===k||x[key]===k)).map(k=>{const tp=r.filter(x=>x.truth===k&&x[key]===k).length;
+  const tot=r.filter(x=>x.truth===k).length+r.filter(x=>x[key]===k).length;return tot?2*tp/tot:0}));
+ return {id,n:r.length,coverage,correct,f1}
+ });
+ return {matrix,per,coverage:avg(per.map(x=>x.coverage)),correct:avg(per.map(x=>x.correct)),f1:avg(per.map(x=>x.f1))};
+}
+function cvPresent(samples,missing){
+ const out=$('lblCompareBody'),p=cvBuild(samples),line=(t)=>out.append(zbNode('div',t));out.replaceChildren();
+ const fmt=x=>x===null?'—':(100*x).toFixed(1)+'%';
+ line('検証：'+p.scheme+'。判定基準用 '+p.trainers+'人。未読込の録音 '+missing+'本。');
+ if(p.unsupported.length)line('比較に必要な別歌い手の学習データ不足：'+p.unsupported.map(r=>r.id+'（'+r.n+'区間）').join('、')+'。比較可能な学習側で各声種に2人以上必要です。');
+ if(!p.predictions.length){line('比較できる組み合わせがありません。現在の判定は変更していません。');return}
+ const used=p.predictions.filter(x=>x.form);
+ const slices=[['すべての比較対象（フォルマントなしも含む）',p.predictions],['候補に信頼できるフォルマントを使用した区間',used]];
+ line('評価できた区間 '+p.predictions.length+'/'+p.total+'、候補がフォルマントを使用できた区間 '+used.length+'/'+p.predictions.length+'。');
+ for(const [label,slice] of slices){
+ line(label+'：'+slice.length+'区間');
+ for(const [key,name] of [['a','倍音のみ'],['b','倍音＋フォルマント候補']]){
+ const s=cvMetrics(slice,key);line(name+'：歌い手均等F1 '+fmt(s.f1)+'、正しく判定 '+fmt(s.correct)+'、判定を出した割合 '+fmt(s.coverage));
+ const e=document.createElement('details');e.append(zbNode('summary',name+'：歌い手別・声種別の内訳'));
+ for(const x of s.per)e.append(zbNode('div',x.id+' '+x.n+'区間：F1 '+fmt(x.f1)+'、正しく判定 '+fmt(x.correct)+'、判定 '+fmt(x.coverage)));
+ for(const k of cvClasses){const total=Object.values(s.matrix[k]).reduce((x,y)=>x+y,0);e.append(zbNode('div','正解 '+k+'（判定 '+fmt(total?1-s.matrix[k][cvNone]/total:null)+'） → '+[...cvClasses,cvNone].map(m=>m+' '+s.matrix[k][m]).join(' ／ ')))}
+ out.append(e)
+ }
+ }
+ const base=cvMetrics(p.predictions,'a'), ext=cvMetrics(p.predictions,'b');const enough=!missing&&!p.unsupported.length&&base.per.length>=2&&used.length>=6&&new Set(used.map(x=>x.id)).size>=2&&cvClasses.every(k=>used.some(x=>x.truth===k));
+ if(!enough)line('採用判断は保留。信頼できるフォルマント・評価できる別歌い手・元録音のいずれかが不足しています。');
+ else if(ext.f1>base.f1&&ext.coverage>=base.coverage)line('今回のデータでは候補を追加検証する価値があります。反映はしていません。');
+ else line('今回のデータでは、倍音のみから切り替える根拠は得られませんでした。');
+ line('判定なしも分母に含めています。性別は推定していません。異なる性別・歌い手集団への精度は未検証です。比較結果で現在の判定基準を自動変更しません。');
+}
+
+function zbNode(tag,text){const el=document.createElement(tag);el.textContent=text;return el}
+function zbShow(track,rows){
+ const card=document.createElement('article');card.append(zbNode('h4',track.name));
+ for(const kind of ['地声','裏声','ミックス','保留']){
+  const stats=rows.filter(x=>x.row.kind===kind);if(!stats.length)continue;
+  const d=document.createElement('details');d.append(zbNode('summary',kind+' '+stats.length+'区間'));for(const line of zbStats(stats))d.append(zbNode('div',line));
+  for(const t of stats){const a=document.createElement('details');a.append(zbNode('summary',lformat(t.row.start)+'〜'+lformat(t.row.end)));for(const line of zbStats([t]))a.append(zbNode('div',line));d.append(a)}card.append(d)
+ }
+ acousticBody.append(card)
+}
+$('lblCancelAcoustic').onclick=()=>{acousticRun++;$('lblAcoustic').disabled=false;$('lblAcousticApply').disabled=false;$('lblCancelAcoustic').hidden=true;$('lblCompare').disabled=false;uiAcoustic.textContent='分析を停止しました。ここまでの結果は残ります。'};
+async function runAcoustic(apply=false,evaluate=false){
+ const id=++acousticRun,snapshot=JSON.stringify(lproject()),ready=new Map(),tested=[];const tracks=new Map();const unavailable=new Set(),required=new Map();let unpermitted=0,used=0,bad=0;
+ for(const row of lrows){if(row.allowed!=='可'){unpermitted++;continue}if(apply&&row.role==='判定基準用'&&learnClasses.includes(row.kind)&&!row.featureKey)required.set(row.key,row.name);if(!sessionAudio.has(row.key)){unavailable.add(row.key);continue}
+ const t=tracks.get(row.key)||{name:row.name,rows:[],key:row.key};t.rows.push({...row});tracks.set(row.key,t)}
+ acousticBody.replaceChildren();$('lblCompareBody').replaceChildren();$('lblAcoustic').disabled=true;$('lblAcousticApply').disabled=true;$('lblCompare').disabled=true;$('lblCancelAcoustic').hidden=false;
+ const delay=()=>new Promise(r=>setTimeout(r,0));
+ try{
+ for(const track of tracks.values()){
+  if(id!==acousticRun)return;uiAcoustic.textContent='端末内で分析中：'+track.name;await delay();
+  let buf;try{buf=lf?.key===track.key&&lready?.buffer?lready.buffer:await zbDecode(sessionAudio.get(track.key))}catch(_){}
+  if(id!==acousticRun)return;
+  if(!buf){bad++;acousticBody.append(zbNode('div',track.name+'：波形をデコードできません。'));continue}
+  const rows=[];for(const rr of track.rows){if(id!==acousticRun)return;rows.push(zbRange(buf,rr));used++;if(apply&&rr.role==='判定基準用'&&learnClasses.includes(rr.kind))ready.set(rr.id,{features:levaluateRange(rr.start,rr.end,buf),featureKey:[rr.kind,rr.start,rr.end].join('|')});if(rows.length%5===0)await delay()}
+  required.delete(track.key);zbShow(track,rows);if(evaluate)tested.push(...rows)
+ }
+ if(id!==acousticRun)return;
+ const summary='分析結果：'+used+'区間。元ファイルを選び直す必要がある録音 '+unavailable.size+'本、利用可でない区間 '+unpermitted+'件、解析できなかった録音 '+bad+'本。';
+ uiAcoustic.textContent=summary+'元音声・分析結果は送信していません。';if(evaluate)cvPresent(tested,unavailable.size+bad);
+ if(apply){
+  if(JSON.stringify(lproject())!==snapshot){uiAcoustic.textContent=summary+'分析中に区間が変わったため、判定基準は変更していません。';return}
+  if(required.size){uiAcoustic.textContent=summary+'未準備の判定基準用録音があるため、前の判定基準を変更していません。';for(const name of required.values())acousticBody.append(zbNode('div','要再選択：'+name));return}
+  for(const r of lrows)if(ready.has(r.id))Object.assign(r,ready.get(r.id));
+  showLearnCoverage();$('lblApplyModel').onclick();uiAcoustic.textContent=summary+' '+$('lblApplyStatus').textContent
+ }
+ }catch(_){if(id===acousticRun)uiAcoustic.textContent='分析中に問題が発生しました。表示済みの結果は残っています。'}
+ finally{if(id===acousticRun){$('lblAcoustic').disabled=false;$('lblAcousticApply').disabled=false;$('lblCompare').disabled=false;$('lblCancelAcoustic').hidden=true}}
+}
+$('lblAcoustic').onclick=()=>runAcoustic(false);
+$('lblAcousticApply').onclick=()=>runAcoustic(true);$('lblCompare').onclick=()=>runAcoustic(false,true);
+function productionHandoff(base,totals){
+ const checked=lvalidate(totals);
+ if(!base||!checked||(!checked['裏声']&&!checked['ミックス']&&(checked['地声']?.n||0)<2))return null;
+ const m=lmerged(base,checked), vectors=[m.scales,m.mix,m.falsetto,...(m.chest?[m.chest]:[])];
+ if(vectors.some(a=>!Array.isArray(a)||a.length!==7||a.some(x=>!Number.isFinite(x)||x< -9||x>5))||m.scales.some(x=>!(x>0)))return null;
+ const n=k=>checked[k]?.n||0, own=k=>1-Math.min(.55,n(k)/(n(k)+3));
+ return {schema:'pitch-meter-voice-register-handoff',version:1,algorithm:'log-harmonic-centroid-v1',
+  model:{scale:m.scales,mix:m.mix,falsetto:m.falsetto,chest_suppression:m.chest},
+  coverage:{original_reference_count:6,added_interval_count:{mix:n('ミックス'),falsetto:n('裏声'),chest:n('地声')},
+   original_weight:{mix:own('ミックス'),falsetto:own('裏声')}},
+  source:'last-applied-calibration'};
+}
+$('lblHandoff').onclick=()=>{
+ let data;try{data=productionHandoff(bakedBaseline,appliedTotals)}catch(_){}
+ const status=$('lblHandoffStatus');
+ if(!data){status.textContent='反映済みの判定基準がありません。先に「区間を判定に反映」を押してください。';return}
+ const out=JSON.stringify(data,null,2);
+ status.textContent='前回反映した判定基準を書き出します。音声やファイル名は入っていません。';
+ lsaveBackup(new File([out+'\n'],'pitch-meter-production-model-v1.json',{type:'application/json'}))
+};
+
+function lbootModel(model){
+ bakedBaseline=model;baked=model;
+ try{appliedTotals=lvalidate(JSON.parse(localStorage.getItem(lmodelKey)||'null'));if(appliedTotals){baked=lmerged(bakedBaseline,appliedTotals);appliedGroups=loadCoverage(appliedTotals)}}catch(_){}
+ lshowModel();try{if(!appliedTotals&&localStorage.getItem('pm_label_voice_model_v1'))$('lblModelStatus').textContent='旧版の追加基準は用途を確認できないため適用せず、初期サンプルを使っています。必要なら基準用区間を選び直してください。'}catch(_){}
+}
+
+$('linkGate').hidden=true;document.querySelector('main').hidden=false;lbootDraft();lshowModel();
+if(location.pathname.startsWith('/labels'))labelMode(true,false);
+</script><script>
+// Frequencies remain unrounded. Only bounded, brief octave excursions are repaired.
+const pitchMidi=f=>69+12*Math.log2(f/440);
+const pitchNear=(a,b,tolerance=.75)=>a>0&&b>0&&Math.abs(pitchMidi(a)-pitchMidi(b))<=tolerance;
+function repairReferencePitch(raw, gapSupported=()=>false) {
+ const scoring=raw.slice();
+ for(let i=3;i<raw.length;i++){
+  const base=raw[i-1];if(!base||!raw[i]||![1,2,3].every(k=>pitchNear(raw[i-k],base)))continue;
+  const jump=pitchMidi(raw[i])-pitchMidi(base),octave=Math.round(jump/12);
+  if(Math.abs(octave)!==1||Math.abs(jump-12*octave)>.75)continue;
+  let end=i;while(end<raw.length&&end-i<3&&pitchNear(raw[end],raw[i]))end++;
+  if(end-i>2||end+2>=raw.length||![0,1,2].every(k=>pitchNear(raw[end+k],base)))continue;
+  for(let j=i;j<end;j++)scoring[j]=raw[j]/Math.pow(2,octave);
+  i=end-1;
+ }
+ const display=scoring.slice();
+ for(let i=3;i<display.length;){
+  if(display[i]){i++;continue}const start=i;while(i<display.length&&!display[i])i++;const end=i,base=display[start-1];
+  if(end-start>2||end+2>=display.length||![1,2,3].every(k=>pitchNear(display[start-k],base))||![0,1,2].every(k=>pitchNear(display[end+k],base)))continue;
+  if(!Array.from({length:end-start},(_,k)=>gapSupported(start+k,base)).every(Boolean))continue;
+  for(let j=start;j<end;j++){const mix=(j-start+1)/(end-start+1);display[j]=Math.exp(Math.log(base)*(1-mix)+Math.log(display[end])*mix)}
+ }
+ return {scoring,display};
+}
+function supportsPitchContinuation(w,hz,rate=16000){
+ const lag=Math.round(rate/hz);let xx=0,yy=0,xy=0,energy=0;
+ for(let i=0;i<w.length;i++)energy+=w[i]*w[i];
+ if(Math.sqrt(energy/w.length)<.004||lag<2||lag>=w.length/2)return false;
+ for(let i=lag;i<w.length;i++){const a=w[i],b=w[i-lag];xx+=a*a;yy+=b*b;xy+=a*b}
+ return xy/Math.sqrt(xx*yy||1)>.7;
+}
+// Causal microphone filter: ordinary motion is immediate; an octave jump needs
+// three consecutive frames (80ms added at 25Hz). Confirmed onsets are backfilled.
+class LivePitchFollower {
+ constructor(){this.reset()}
+ reset(){this.base=0;this.stable=0;this.pending=[];this.lastIndex=-1}
+ finish(){const edits=this.pending.map(p=>({index:p.index,hz:p.raw}));this.pending=[];return edits}
+ push(raw,index){
+  const edits=[];if(index!==this.lastIndex+1){edits.push(...this.finish());this.base=0;this.stable=0}this.lastIndex=index;
+  if(!(raw>0)){edits.push(...this.finish());this.base=0;this.stable=0;return {hz:0,edits}}
+  if(this.pending.length){
+   if(pitchNear(raw,this.base)){this.pending=[];this.stable++;this.base=raw;return {hz:raw,edits}}
+   if(pitchNear(raw,this.pending[0].raw)){
+    this.pending.push({index,raw});
+    if(this.pending.length===3){edits.push(...this.finish());this.base=raw;this.stable=3;return {hz:raw,edits}}
+    return {hz:raw/Math.pow(2,this.octave),edits};
+   }
+   edits.push(...this.finish());this.base=raw;this.stable=1;return {hz:raw,edits};
+  }
+  const jump=this.base?pitchMidi(raw)-pitchMidi(this.base):0,octave=Math.round(jump/12);
+  if(this.stable>=3&&Math.abs(octave)===1&&Math.abs(jump-octave*12)<=.75){this.octave=octave;this.pending=[{index,raw}];return {hz:raw/Math.pow(2,octave),edits}}
+  this.stable=pitchNear(raw,this.base)?this.stable+1:1;this.base=raw;return {hz:raw,edits};
+ }
+
+}
+
+// Hold only the visible marker for a brief missed detection. Recorded bins remain unchanged.
+class LivePitchPointer {
+ constructor(holdSeconds=.18){this.holdSeconds=holdSeconds;this.reset()}
+ reset(){this.hz=0;this.confirmedAt=-Infinity}
+ observe(hz,audioTime){
+  if(Number.isFinite(hz)&&hz>0&&Number.isFinite(audioTime)){this.hz=hz;this.confirmedAt=audioTime}
+ }
+ at(audioTime){
+  const age=audioTime-this.confirmedAt;
+  return age>=0&&age<=this.holdSeconds?this.hz:0;
+ }
+}
+
+// Display-only note segmentation; never mutates or replaces scoring frequencies.
+function buildPitchBars(frequencies, step=.04) {
+ const midi=frequencies.map(f=>Number.isFinite(f)&&f>=90&&f<=800?69+12*Math.log2(f/440):null);
+ const bars=[];
+ for(let a=0;a<midi.length;){
+  if(midi[a]===null){a++;continue}let b=a+1;while(b<midi.length&&midi[b]!==null)b++;
+  const smooth=[];for(let i=a;i<b;i++){const near=midi.slice(Math.max(a,i-1),Math.min(b,i+2)).sort((x,y)=>x-y);smooth.push(near[Math.floor(near.length/2)])}
+  let note=Math.round(smooth[0]),start=a,candidate=null,candidateStart=0;
+  const emit=end=>{if(end-start>=3)bars.push({start:start*step,end:end*step,midi:note})};
+  for(let i=a+1;i<b;i++){
+   const value=smooth[i-a],target=Math.round(value);
+   if(Math.abs(value-note)<=.75||target===note){candidate=null;continue}
+   if(candidate!==target){candidate=target;candidateStart=i}
+   if(i-candidateStart+1>=3){emit(candidateStart);start=candidateStart;note=target;candidate=null}
+  }
+  emit(b);a=b;
+ }
+ return bars;
+}
+
+// Display-only phrase pages. Absolute song timestamps remain the scoring clock.
+function buildPhrasePages(reference,duration,step=.04){
+ if(!(duration>0))return [];
+ const rests=[];
+ for(let i=0;i<reference.length;){
+  if(reference[i]>0){i++;continue}
+  const a=i;while(i<reference.length&&!(reference[i]>0))i++;
+  const start=a*step,end=Math.min(duration,i*step);
+  if(end-start>=.24-1e-8)rests.push({start,end});
+ }
+ const pages=[];let start=0;
+ while(duration-start>8+1e-8){
+  const min=start+3,max=start+8,target=start+6;
+  const cuts=rests.filter(r=>r.end>min&&r.start<max).map(r=>Math.max(min,Math.min(max,Math.max(r.start,Math.min(r.end,(r.start+r.end)/2)))));
+  const end=cuts.length?cuts.sort((a,b)=>Math.abs(a-target)-Math.abs(b-target))[0]:max;
+  pages.push({start,end});start=end;
+ }
+ pages.push({start,end:duration});return pages;
+}
+function phrasePageAt(pages,time){
+ if(!pages.length)return -1;
+ let lo=0,hi=pages.length-1;
+ while(lo<hi){const mid=Math.floor((lo+hi)/2);if(time>=pages[mid].end)lo=mid+1;else hi=mid}
+ return lo;
+}
+function phrasePageView(pages,time,width){
+ const index=phrasePageAt(pages,time),page=pages[index]||{start:0,end:1};
+ const left=8,right=Math.max(left+1,width-8),scale=(right-left)/Math.max(.001,page.end-page.start);
+ const x=t=>left+(t-page.start)*scale;
+ return {index,page,left,right,scale,x,head:Math.max(left,Math.min(right,x(time)))};
+}
+function drawPhraseGuide(g,bars,view,y,verdicts){
+ for(let i=0;i<bars.length;i++){
+  const bar=bars[i],start=Math.max(bar.start,view.page.start),end=Math.min(bar.end,view.page.end);
+  if(end<=start)continue;
+  const x1=view.x(start),x2=view.x(end),center=y(440*2**((bar.midi-69)/12));
+  let top=center-7,bottom=center+7;
+  const verdict=verdicts?.get(i);
+  if(verdict&&!verdict.success&&verdict.shift){
+   // Keep the red bar's original 8px width and measured position. Cut back only
+   // the edge of this guide that would otherwise collide with the red bar.
+   const shifted=y(440*2**((bar.midi+verdict.shift-69)/12));
+   const gap=Math.min(1,Math.abs(shifted-center)*.25);
+   if(shifted<center)top=Math.max(top,shifted+7+gap);
+   else bottom=Math.min(bottom,shifted-7-gap);
+  }
+  if(bottom<=top)continue;
+  // Only the unpassed guide is translucent, never the meter or judged result.
+  if(x2<=view.head)g.fillStyle='#dfb1ff';
+  else if(x1>=view.head)g.fillStyle='rgba(223,177,255,.55)';
+  else {const fade=g.createLinearGradient(x1,0,x2,0),cut=(view.head-x1)/(x2-x1);fade.addColorStop(0,'#dfb1ff');fade.addColorStop(cut,'#dfb1ff');fade.addColorStop(cut,'rgba(223,177,255,.55)');fade.addColorStop(1,'rgba(223,177,255,.55)');g.fillStyle=fade;}
+  g.beginPath();g.roundRect(x1,top,x2-x1,bottom-top,Math.min((bottom-top)/2,(x2-x1)/2));g.fill();
+ }
+}
+function drawPhraseTrace(g,data,view,y,through,step=.04){
+ g.strokeStyle='#ff99ce';g.lineWidth=4;g.lineCap='round';g.lineJoin='round';g.beginPath();
+ const from=Math.max(0,Math.floor(view.page.start/step)),to=Math.min(data.length-1,Math.floor(Math.min(through,view.page.end)/step));
+ let pen=false;
+ for(let i=from;i<=to;i++){
+  const f=data[i],time=i*step;
+  if(!(f>0)){pen=false;continue}
+  // Never carry a segment from the previous page or draw future singing.
+  if(time<view.page.start)continue;
+  const x=Math.min(view.right,view.x(time));
+  if(pen)g.lineTo(x,y(f));else {g.moveTo(x,y(f));g.lineTo(x,y(f));}pen=true;
+ }
+ g.stroke();
+}
+function phraseAccuracy(reference,actual,page,through,step=.04){
+ let expected=0,voiced=0,matched=0;
+ const first=Math.max(0,Math.ceil(page.start/step)),last=Math.min(reference.length-1,Math.floor(Math.min(through,page.end)/step));
+ for(let i=first;i<=last;i++){
+  const r=reference[i];if(!(r>0)||i*step>=page.end)continue;expected++;
+  const f=actual[i];if(!(f>0))continue;voiced++;
+  if(Math.abs(1200*Math.log2(f/r))<200-1e-7)matched++;
+ }
+ return {expected,voiced,matched,accuracy:expected?matched/expected:0,eligible:expected>=10&&voiced>=10&&matched/expected>=.7};
+}
+function createPhraseCelebration(){
+ const checked=new Set();let flash=null;
+ return {reset(){checked.clear();flash=null},update(view,time,reference,actual,step=.04){
+  if((time-view.page.start)/(view.page.end-view.page.start)>=.7&&!checked.has(view.index)){
+   checked.add(view.index);if(phraseAccuracy(reference,actual,view.page,time,step).eligible)flash={page:view.index,start:time};
+  }
+  return flash&&flash.page===view.index&&time>=flash.start&&time-flash.start<.85?time-flash.start:null;
+ }};
+}
+function drawPhraseSparkles(g,width,height,age){
+ if(age===null)return;
+ const progress=age/.85;g.save();g.globalAlpha=.28*Math.sin(Math.PI*progress);g.strokeStyle='#ffd9f1';g.lineWidth=1.4;
+ for(let i=0;i<10;i++){
+  const x=((i/10+progress*.65)%1)*width,y=height*(.2+.6*((i*7%11)/10)),r=2+i%3;
+  g.beginPath();g.moveTo(x-r,y);g.lineTo(x+r,y);g.moveTo(x,y-r);g.lineTo(x,y+r);g.stroke();
+ }
+ g.restore();
+}
+
+// One display verdict per original guide bar, independent of page clipping/scoring.
+function judgeGuideBar(bar,reference,actual,step=.04){
+ const duration=Math.max(0,bar.end-bar.start),deviations=[];let matched=0,voiced=0;
+ for(let i=Math.max(0,Math.floor(bar.start/step));i*step<bar.end;i++){
+  const weight=Math.max(0,Math.min(bar.end,(i+1)*step)-Math.max(bar.start,i*step));
+  const r=reference[i],f=actual[i];if(!(r>0&&f>0&&Number.isFinite(r)&&Number.isFinite(f)))continue;
+  const cents=1200*Math.log2(f/r);voiced+=weight;deviations.push({cents,weight});
+  if(Math.abs(cents)<200-1e-7)matched+=weight;
+ }
+ const ratio=duration?matched/duration:0,success=ratio>=.5-1e-9;
+ let shift=0;
+ if(!success&&voiced>=Math.min(.12,duration*.5)&&deviations.length){
+  deviations.sort((a,b)=>a.cents-b.cents);let sum=0,median=0;
+  for(const d of deviations){sum+=d.weight;if(sum>=voiced/2){median=d.cents;break}}
+  const direction=Math.sign(median),support=deviations.reduce((s,d)=>s+(Math.sign(d.cents)===direction?d.weight:0),0);
+  if(Math.abs(median)>=50&&support/voiced>=.6)shift=direction*Math.min(4,Math.max(1,Math.abs(median)/100));
+ }
+ return {success,ratio,shift};
+}
+function finalizeGuideBars(results,bars,reference,actual,through,step=.04){
+ for(let i=0;i<bars.length;i++)if(!results.has(i)&&bars[i].end<=through+1e-8)results.set(i,judgeGuideBar(bars[i],reference,actual,step));
+}
+function drawGuideVerdicts(g,bars,results,view,y,height=14){
+ for(let i=0;i<bars.length;i++){
+  const result=results.get(i);if(!result)continue;const bar=bars[i];
+  const start=Math.max(view.page.start,bar.start),end=Math.min(view.page.end,bar.end);if(end<=start)continue;
+  const x=view.x(start),w=view.x(end)-x;
+  // Unvoiced or directionally ambiguous: leave the original guide neutral.
+  if(!result.success&&!result.shift)continue;
+  const excellent=result.success&&result.ratio>=.7-1e-9;
+  if(excellent){const gradient=g.createLinearGradient(x,0,x+w,0);gradient.addColorStop(0,'#bb7ce8');gradient.addColorStop(1,'#f285be');g.fillStyle=gradient;}else g.fillStyle=result.success?'#ff99ce':'#ff667d';g.shadowColor='rgba(255,153,206,.25)';g.shadowBlur=result.success?3:0;
+  g.beginPath();g.roundRect(x,y(440*2**((bar.midi+result.shift-69)/12))-height/2,w,height,Math.min(height/2,w/2));g.fill();
+  if(excellent&&w>3){g.shadowBlur=0;g.fillStyle='rgba(255,255,255,.18)';g.beginPath();g.roundRect(x+1,y(440*2**((bar.midi-69)/12))-height/2+1,w-2,Math.min(2,height/3),1);g.fill();}
+ }
+ g.shadowBlur=0;
+}
+
+// Karaoke is entirely browser-local. No fetch, upload, or persistent recording.
+function scoreTake(reference, actual, step=.04) {
+ const expected=reference.reduce((n,f)=>n+(f>0),0);
+ if(expected<25)return {valid:false,reason:'見本の有声音が1秒未満のため採点できません。'};
+ let best={loss:Infinity,strict:Infinity,shift:0,coverage:0};
+ for(let shift=-Math.round(1.5/step);shift<=Math.round(1.5/step);shift++){
+  let loss=0,strict=0,covered=0;
+  reference.forEach((f,i)=>{if(!f)return;const a=actual[i+shift]||0;if(!a){loss+=100;strict+=2400;return}covered++;const cents=Math.abs(1200*Math.log2(a/f));strict+=Math.min(2400,cents);loss+=cents<=200+1e-7?0:Math.min(100,(cents-200)/3)});
+  loss/=expected;
+  if(loss<best.loss-1e-8||(Math.abs(loss-best.loss)<1e-8&&(strict<best.strict-1e-7||(Math.abs(strict-best.strict)<1e-7&&Math.abs(shift)<Math.abs(best.shift)))))best={loss,strict,shift,coverage:covered/expected};
+ }
+ let streak=0,longest=0;
+ reference.forEach((f,i)=>{streak=f>0&&(actual[i+best.shift]||0)>0?streak+1:0;longest=Math.max(longest,streak)});
+ return {valid:true,score:Math.round(Math.max(0,Math.min(100-best.loss,100*best.coverage))),delay:best.shift*step,coverage:best.coverage,bonusEligible:best.coverage*expected>=Math.max(25,.2*expected)&&longest>=10};
+}
+// One closure per take: no second random draw on repeated score-button presses.
+function createTakeScorer(random=Math.random){
+ let cached=null;
+ return (reference,actual)=>{
+  if(cached)return cached;
+  const base=scoreTake(reference,actual);if(!base.valid)return cached=base;
+  const bonus=base.bonusEligible?22+Math.min(5,Math.floor(random()*6)):0;
+  return cached={...base,baseScore:base.score,bonus,score:Math.min(100,base.score+bonus)};
+ };
+}
+// Choose the true best candidate first, then reject any pitch that the unchanged mic cannot score.
+function karaokeMicCompatible(track){return track.map(f=>f>90&&f<800?f:0)}
+function plotPitchTrace(g,data,{now,step,head,scale,width,y,color,weight,history=false,spanEdges=false}){
+ const x=i=>head+(i*step-now)*scale,endX=history?head:width;
+ const a=Math.max(0,Math.floor((now-head/scale)/step)-1),b=Math.min(data.length,Math.ceil((now+(endX-head)/scale)/step)+1);
+ const valid=f=>Number.isFinite(f)&&f>0;
+ g.strokeStyle=color;g.lineWidth=weight;g.lineCap='round';g.lineJoin='round';g.beginPath();
+ let pen=false;
+ for(let i=a;i<b;i++){
+  const f=data[i],px=x(i);
+  if(!valid(f)||px>endX){pen=false;continue}
+  const yy=y(f),half=spanEdges?step*scale*.5:0;
+  if(!pen){g.moveTo(px-half,yy);if(half)g.lineTo(px,yy)}
+  else g.lineTo(px,yy);
+  if(half&&!valid(data[i+1]))g.lineTo(Math.min(endX,px+half),yy);
+  pen=true;
+ }
+ g.stroke();
+}
+// Match the available original meter's fixed MIDI 52..74 position mapping.
+// Original app's red interpolation source is unavailable; preserve the documented
+// white-red-white behavior, holding red from mix to halfway toward falsetto.
+function karaokePointerColor(hz){
+ const p=Math.max(0,Math.min(1,(69+12*Math.log2(hz/440)-52)/22));
+ const smooth=t=>{t=Math.max(0,Math.min(1,t));return t*t*(3-2*t)};
+ const red=smooth((p-1/3)/(1/6))*(1-smooth((p-2/3)/(1/6)));
+ return 'rgb(255,'+Math.round(241+(83-241)*red)+','+Math.round(250+(106-250)*red)+')';
+}
+function karaokeMeterGeometry(height,lo,hi){
+ const pad=Math.max(11,Math.min(24,Math.round(height*.09)));
+ const plotHeight=Math.max(1,height-pad*2),span=Math.max(1,hi-lo);
+ const labelFont=height<150?10:11;
+ const labelEvery=[3,4,6,12,24].find(n=>n*plotHeight/span>=labelFont+4)||24;
+ return {pad,plotHeight,span,labelFont,labelEvery};
+}
+(()=>{
+ const el=id=>document.getElementById(id),page=el('karaokePage'),canvas=el('kCanvas'),g=canvas.getContext('2d'),step=.04;
+ let sepWorker=null,sepReject=null;const follower=new LivePitchFollower(),pointer=new LivePitchPointer(),celebration=createPhraseCelebration();
+ let takeScore=createTakeScorer();const barVerdicts=new Map();
+ let audio,buffer,ref=[],guide=[],bars=[],pages=[],actual=[],micStream,micNode,analyser,playNode,start=0,mode='idle',run=0,raf=0,now=0,lastBin=-1,lo=48,hi=81;
+ const status=t=>el('kStatus').textContent=t;
+ const fmt=t=>Math.floor(Math.max(0,t)/60)+':'+String(Math.floor(Math.max(0,t)%60)).padStart(2,'0');
+ function controls(){el('kReview').disabled=!buffer||['loading','starting','countdown','playing'].includes(mode);el('kPlay').disabled=!buffer||['loading','starting','countdown','playing'].includes(mode);el('kStop').disabled=!['starting','countdown','playing'].includes(mode);el('kScore').disabled=!(buffer&&(mode==='ended'||mode==='playing'||(mode==='ready'&&window.__pmSeg.keep)));el('kFile').disabled=['starting','countdown','playing','loading'].includes(mode);el('kSource').disabled=el('kFile').disabled;el('kStop').disabled=!['starting','countdown','playing','loading'].includes(mode)}
+ function release(){cancelAnimationFrame(raf);window.__pmMix.stopAcc();if(playNode){playNode.onended=null;try{playNode.stop()}catch(_){}playNode.disconnect();playNode=null}micNode?.disconnect();micNode=null;micStream?.getTracks().forEach(t=>t.stop());micStream=null;analyser=null;pointer.reset();el('kCount').textContent=''}
+ function stop(message){++run;window.__pmSeg.keep=false;if(sepWorker){sepWorker.terminate();sepWorker=null;sepReject?.(Error('中止しました。'));sepReject=null}release();mode=buffer?'ready':'idle';controls();draw();if(message)status(message)}
+ function show(k){stop();stopPlayback();halt();el('mic').disabled=false;lstop();if(k)labelMode(false,false);page.hidden=!k;el('meterHome').hidden=k;el('labelsPage').hidden=true;document.querySelector('main').classList.remove('labelsMode');el('navKaraoke').setAttribute('aria-pressed',String(k));el('navMaterial').setAttribute('aria-pressed',String(!k));if(k)requestAnimationFrame(draw)}
+ el('navKaraoke').onclick=()=>show(true);el('navMaterial').onclick=()=>show(false);
+ function draw(){
+  const box=canvas.getBoundingClientRect();if(!box.width||!box.height)return;const d=Math.min(devicePixelRatio||1,2),W=box.width,H=box.height;
+  if(canvas.width!==Math.round(W*d)||canvas.height!==Math.round(H*d)){canvas.width=Math.round(W*d);canvas.height=Math.round(H*d)}g.setTransform(d,0,0,d,0,0);g.clearRect(0,0,W,H);
+  const {pad,plotHeight,span,labelFont,labelEvery}=karaokeMeterGeometry(H,lo,hi),bottom=H-pad;
+  const view=phrasePageView(pages,now,W),head=view.head,midiY=m=>bottom-(m-lo)*plotHeight/span,y=f=>midiY(69+12*Math.log2(f/440));
+  g.font=labelFont+'px system-ui';g.textBaseline='middle';
+  for(let n=lo;n<=hi;n++){
+   const yy=midiY(n);g.strokeStyle=n%12===0?'#694362':'#ffffff0c';g.lineWidth=1;g.beginPath();g.moveTo(0,yy);g.lineTo(W,yy);g.stroke();
+   if(n%labelEvery===0){g.fillStyle='#a58caa';g.fillText(['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'][n%12]+(Math.floor(n/12)-1),W-30,yy-3)}
+  }
+  const grad=g.createLinearGradient(0,H,0,0);grad.addColorStop(0,'#3bc4e0');grad.addColorStop(.5,'#a678ff');grad.addColorStop(1,'#f285be');g.strokeStyle=grad;g.lineWidth=6;g.lineCap='round';g.beginPath();g.moveTo(head,pad);g.lineTo(head,bottom);g.stroke();
+  if(actual.length&&['playing','ended'].includes(mode))finalizeGuideBars(barVerdicts,bars,ref,actual,now,step);
+  drawPhraseGuide(g,bars,view,y,barVerdicts);
+  drawGuideVerdicts(g,bars,barVerdicts,view,y);
+  const sparkle=mode==='playing'?celebration.update(view,now,ref,actual,step):null;
+  if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)drawPhraseSparkles(g,W,H,sparkle);
+  const currentHz=pointer.at(now);
+  if(currentHz){g.fillStyle=karaokePointerColor(currentHz);g.shadowColor='rgba(255,120,158,.38)';g.shadowBlur=6;g.beginPath();g.arc(head,Math.max(pad,Math.min(bottom,y(currentHz))),6,0,Math.PI*2);g.fill();g.shadowBlur=0}
+  g.fillStyle='#ead4e8';g.font='12px system-ui';if(!ref.length){g.textAlign='center';g.fillStyle='#cbb3ce';g.fillText(W<250?'素材を選ぶと見本を表示':'素材を読み込むと見本が表示されます',W/2,H/2,Math.max(1,W-16));g.textAlign='left'}
+  el('kTime').textContent=fmt(now)+' / '+fmt(buffer?.duration||0);el('kReview').value=String(now);el('kPhrase').textContent=pages.length?'フレーズ '+(view.index+1)+' / '+pages.length:'フレーズ未解析';
+ }
+ const importKaraoke=async e=>{
+  const file=e.target.files[0];if(!file)return;stop();window.__pmMix.setStems(null);Object.assign(window.__pmSeg,{pos:0,from:0,to:null,key:'',gate:0});const id=++run;buffer=null;ref=[];guide=[];bars=[];pages=[];actual=[];barVerdicts.clear();el('kKey').textContent='キー：未解析';now=0;mode='loading';controls();el('kResult').hidden=true;draw();status('端末内で音声を読み取り中…');
+  try{
+   
+   const OC=window.OfflineAudioContext||window.webkitOfflineAudioContext;if(!OC)throw Error('このブラウザは素材の音声解析に対応していません。');
+   const raw=await file.arrayBuffer();if(id!==run)return;
+   const decoded=await PMScreenAudio.decode(raw,OC,()=>id===run);
+   if(id!==run)return;
+   let referenceBuffer=decoded;
+   if(el('kSource').value==='mixed'){
+    
+    status('端末内の歌声分離を準備しています…');
+    if(decoded.duration>600)status('長い素材です。端末内で歌声を分離します（目安：約'+Math.ceil(decoded.duration/120)+'分）。');const vocals=await new Promise((resolve,reject)=>{
+     sepReject=reject;const worker=new Worker('/separator-worker.js');sepWorker=worker;
+     const finish=()=>{worker.terminate();if(sepWorker===worker){sepWorker=null;sepReject=null}};
+     worker.onmessage=({data})=>{if(id!==run){finish();reject(Error('中止しました。'));return}if(data.stage==='done'){finish();resolve(data.vocals)}else if(data.stage==='error'){finish();reject(Error(data.message))}else status(data.text)};
+     worker.onerror=()=>{finish();reject(Error('分離処理を開始・継続できません。Safariの空きメモリや通信を確認してください。混合音での採点には切り替えません。'))};
+     const left=new Float32Array(decoded.getChannelData(0)),right=new Float32Array(decoded.getChannelData(Math.min(1,decoded.numberOfChannels-1)));worker.postMessage({left,right},[left.buffer,right.buffer]);
+    });
+    if(id!==run)return;
+    window.__pmMix.setStems(decoded,vocals);const resample=new OC(1,Math.ceil(vocals.length*16000/44100),16000),source=resample.createBufferSource(),voice=resample.createBuffer(1,vocals.length,44100);voice.copyToChannel(vocals,0);source.buffer=voice;source.connect(resample.destination);source.start();referenceBuffer=await resample.startRendering();
+   }else{
+    const resample=new OC(decoded.numberOfChannels,Math.ceil(decoded.duration*16000),16000),source=resample.createBufferSource();source.buffer=decoded;source.connect(resample.destination);source.start();referenceBuffer=await resample.startRendering();
+   }
+   if(id!==run)return;
+   const frames=Math.ceil(decoded.duration/step);
+   const channels=Array.from({length:referenceBuffer.numberOfChannels},(_,i)=>new Float32Array(referenceBuffer.getChannelData(i)));
+   referenceBuffer=null;
+   const analyzed=await new Promise((resolve,reject)=>{
+    sepReject=reject;const worker=new Worker('/reference-pitch-worker.js?v=6');sepWorker=worker;
+    const finish=()=>{worker.terminate();if(sepWorker===worker){sepWorker=null;sepReject=null}};
+    worker.onmessage=({data})=>{
+     if(id!==run){finish();reject(Error('中止しました。'));return}
+     if(data.type==='progress'){status('見本の音程を解析中 '+Math.round(data.value*100)+'%');return}
+     finish();if(data.type==='result')resolve(data);else reject(Error('見本の音程解析に失敗しました。'))
+    };
+    worker.onerror=()=>{finish();reject(Error('見本の音程解析を開始・継続できません。Safariでページを開き直してください。'))};
+    try{worker.postMessage({channels,length:frames,step},channels.map(ch=>ch.buffer))}
+    catch(e){finish();reject(e)}
+   });
+   if(id!==run)return;
+   const compatible=karaokeMicCompatible(analyzed.hz);
+   if(!compatible.some(f=>f>0))throw Error('見本に使える音程（約90〜800 Hz）が見つかりませんでした。歌声がはっきり聞こえる素材をお試しください。');
+   buffer=decoded;ref=compatible;guide=karaokeMicCompatible(analyzed.display);bars=buildPitchBars(Array.from(guide),step).map(bar=>({...bar,end:Math.min(bar.end,decoded.duration)}));pages=buildPhrasePages(ref,decoded.duration,step);el('kReview').max=String(decoded.duration);el('kKey').textContent=analyzed.key.confident?'キー（自動設定・推定）：'+analyzed.key.label:'キー：判定保留'+(analyzed.key.label?'（候補 '+analyzed.key.label+'）':'')+' · キー補正なし';const pitches=ref.filter(f=>f>0).map(f=>69+12*Math.log2(f/440));const barPitches=bars.map(b=>b.midi);lo=Math.floor(Math.min(48,...pitches,...barPitches))-4;hi=Math.ceil(Math.max(76,...pitches,...barPitches))+4;mode='ready';status(file.name+(el('kSource').value==='mixed'?' · 分離した歌声から見本を準備しました。':' · 歌声のみ素材から見本を準備しました。')+'再生音は元素材です。');
+  }catch(err){if(id!==run)return;mode='idle';status(err.pm?err.message:err.message==='The buffer passed to decodeAudioData contains an unknown content type.'?'音声を読み取れません。音声付きMP4/M4A/WAVなど別の素材を選んでください。':('読み込み失敗：'+err.message))}
+  if(id===run){controls();draw()}
+ };
+ el('kFile').onchange=importKaraoke;
+ el('kSource').onchange=()=>{stop();buffer=null;ref=[];guide=[];bars=[];pages=[];actual=[];barVerdicts.clear();el('kKey').textContent='キー：未解析';now=0;el('kFile').value='';el('kResult').hidden=true;controls();draw();status('素材の種類を変更しました。動画・音声を選び直してください。')};
+ el('kPlay').onclick=async()=>{
+  if(!buffer)return;stopPlayback();halt();const id=++run;release();mode='starting';const S=window.__pmSeg,off=Math.max(0,Math.min(buffer.duration-.05,S.pos||0)),keep=S.keep&&actual.length===ref.length;S.keep=false;now=off;if(!keep){actual=new Array(ref.length).fill(0);barVerdicts.clear();takeScore=createTakeScorer();S.from=off;S.key=''}lastBin=-1;follower.reset();celebration.reset();S.to=null;S.gate=off;el('kResult').hidden=true;controls();status('マイクの許可を確認中…');
+  try{
+   const AC=window.AudioContext||window.webkitAudioContext;audio??=new AC();await audio.resume();
+   if(!navigator.mediaDevices?.getUserMedia)throw Error('SafariでHTTPSの公開リンクを開いてください。');
+   const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});if(id!==run){stream.getTracks().forEach(t=>t.stop());return}micStream=stream;await audio.resume();if(id!==run)return;
+   micNode=audio.createMediaStreamSource(stream);analyser=audio.createAnalyser();analyser.fftSize=8192;micNode.connect(analyser);stream.getAudioTracks()[0].onended=()=>stop('マイクが切断されました。再生し直してください。');
+   playNode=audio.createBufferSource();playNode.buffer=buffer;playNode.connect(window.__pmMix.gain(audio,'o'));start=audio.currentTime+3-off;playNode.start(start+off,off);window.__pmMix.startAcc(audio,start+off,off);mode='countdown';controls();status('3、2、1の後に再生します。');
+   playNode.onended=()=>{if(id!==run)return;now=buffer.duration;for(const edit of follower.finish())actual[edit.index]=edit.hz;release();mode='ended';window.__pmSeg.to=buffer.duration;window.__pmSeg.pos=0;controls();draw();status('再生終了。「採点する」で結果を確認できます。')};
+   const arr=new Float32Array(analyser.fftSize),w=new Float32Array(960);
+   function frame(){if(id!==run)return;if(audio.state!=='running'){stop('音声処理が中断しました。再生し直してください。');return}const t=audio.currentTime-start;now=Math.max(0,Math.min(buffer.duration,t));const G=window.__pmSeg.gate||0;el('kCount').textContent=t<G?String(Math.ceil(G-t)):'';
+    if(t>=G){if(mode==='countdown'){mode='playing';controls();status('歌ってください。見本と実唱を重ねています。')}const bin=Math.round((t-.03)/step);if(bin>=0&&bin<actual.length&&bin!==lastBin){lastBin=bin;analyser.getFloatTimeDomainData(arr);const ratio=audio.sampleRate/16000;for(let j=0;j<960;j++){const p=arr.length-1-(959-j)*ratio,k=Math.floor(p);w[j]=(arr[k]||0)+(p-k)*((arr[k+1]||0)-(arr[k]||0))}const tracked=follower.push(f0(w),bin);for(const edit of tracked.edits)actual[edit.index]=edit.hz;actual[bin]=tracked.hz;pointer.observe(tracked.hz,now)}}
+    draw();raf=requestAnimationFrame(frame)
+   }frame();
+  }catch(err){if(id===run){stop();status(err.name==='NotAllowedError'?'マイクが許可されていません。Safariのサイト設定で許可してください。':'開始できませんでした：'+err.message)}}
+ };
+ el('kReview').oninput=()=>{if(!buffer||['loading','starting','countdown','playing'].includes(mode))return;now=Math.max(0,Math.min(buffer.duration,Number(el('kReview').value)||0));pointer.reset();draw()};
+ el('kStop').onclick=()=>stop('停止しました。最初から再生し直せます。');window.__pmK={
+ state(){const S=window.__pmSeg;return {now,dur:buffer?buffer.duration:0,mode,from:S.from||0,to:S.to,keep:!!S.keep,ready:!!(buffer&&ref.length)}},
+ dbg(){const a=Math.floor((window.__pmSeg.from||0)/step);let before=0,inWin=0;actual.forEach((f,i)=>{if(f>0){if(i<a)before++;else inWin++}});return {before,inWin,playing:!!playNode}},
+ flush(){for(const edit of follower.finish())actual[edit.index]=edit.hz},
+ restartAt(pos){const id=run,S=window.__pmSeg;if(playNode){playNode.onended=null;try{playNode.stop()}catch(_){}playNode.disconnect()}window.__pmMix.stopAcc();
+  playNode=audio.createBufferSource();playNode.buffer=buffer;playNode.connect(window.__pmMix.gain(audio,'o'));const t0=audio.currentTime+.05;start=t0-pos;S.gate=pos;playNode.start(t0,pos);window.__pmMix.startAcc(audio,t0,pos);
+  playNode.onended=()=>{if(id!==run)return;now=buffer.duration;window.__pmK.flush();release();mode='ended';S.to=buffer.duration;S.pos=0;controls();draw();status('再生終了。「採点する」で結果を確認できます。')}},
+ clearTake(from){const S=window.__pmSeg;actual=new Array(ref.length).fill(0);barVerdicts.clear();follower.reset();lastBin=-1;celebration.reset();takeScore=createTakeScorer();S.from=from;S.to=null;S.key='';S.keep=false},
+ seek(pos){const S=window.__pmSeg;if(!buffer||!ref.length||['loading','starting','countdown'].includes(mode))return false;pos=Math.max(0,Math.min(buffer.duration-.05,Number(pos)||0));
+  if(mode==='playing'){this.clearTake(pos);now=pos;pointer.reset();this.restartAt(pos);status('再生位置を '+fmt(pos)+' に変えました。ここから採点します。');return true}
+  this.clearTake(pos);S.pos=pos;now=pos;pointer.reset();if(mode==='ended')mode='ready';controls();draw();status('再生位置 '+fmt(pos)+'。「再生」でここから始まり、ここから採点します。');return true},
+ reset(){const S=window.__pmSeg;if(!buffer||!ref.length||['loading','starting','countdown'].includes(mode))return false;
+  if(mode==='playing'){this.clearTake(now);status('リセットしました。'+fmt(now)+' から採点し直します。');return true}
+  this.clearTake(0);S.pos=0;now=0;pointer.reset();if(mode==='ended')mode='ready';controls();draw();status('リセットしました。最初（0:00）から再生・採点します。');return true},
+ pause(){const S=window.__pmSeg;if(['starting','countdown'].includes(mode)){stop('停止しました。');return}if(mode!=='playing')return;this.flush();const pos=now;stop('一時停止しました（'+fmt(pos)+'）。「再生」で続きから。「採点する」でここまでを採点します。');S.pos=pos;S.to=pos;now=pos;S.keep=true;controls();draw()},
+ scoreNow(){const S=window.__pmSeg;if(!buffer||!ref.length)return null;
+  if(['starting','countdown'].includes(mode)){stop('まだ歌が始まっていないため採点できません。');return null}
+  if(mode==='playing'){this.flush();const pos=now;stop();S.to=pos;S.pos=0;now=pos;mode='ended'}
+  if(mode==='ready'&&S.keep){S.keep=false;mode='ended'}
+  if(mode!=='ended')return null;
+  const to=S.to==null?buffer.duration:S.to,from=S.from||0,a=Math.max(0,Math.floor(from/step)),b=Math.min(ref.length,Math.ceil(to/step)),key=a+':'+b;
+  if(S.key!==key){S.key=key;takeScore=createTakeScorer()}
+  const w=ref.map((f,i)=>i>=a&&i<b?f:0);controls();draw();status('採点区間 '+fmt(from)+' 〜 '+fmt(to)+'（この区間だけを採点）');window.__pmK.last={from,to,a,b};return takeScore(w,actual)}
+};
+
+ el('kScore').onclick=()=>{const r=window.__pmK.scoreNow();if(!r)return;el('kResult').hidden=false;el('kResult').replaceChildren();if(!r.valid){el('kResult').textContent=r.reason;return}const strong=document.createElement('strong');strong.textContent=r.score+' 点';const p=document.createElement('p');p.textContent='暫定採点 · 基礎 '+r.baseScore+'点 + 加点 '+r.bonus+'点 · 有声音の一致対象 '+Math.round(r.coverage*100)+'% · 実唱の時間補正 '+(-r.delay).toFixed(2)+'秒';el('kResult').append(strong,p);};
+ document.addEventListener('visibilitychange',()=>{if(document.hidden&&['starting','playing','countdown','loading'].includes(mode))stop('画面が離れたため停止しました。再生し直してください。')});window.addEventListener('pagehide',()=>stop());window.addEventListener('resize',draw);show(true);controls();
+})();
+</script></html>
