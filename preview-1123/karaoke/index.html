@@ -8528,7 +8528,8 @@ $('open-karaoke').onclick = () => openFull(false);
 $('open-combo').onclick = openCombo;
 $('kara-back').onclick = closeFull;
 $('c-pick').onclick = () => $('c-file').click();
-async function feed(f) { await ensureKaraoke(); const inp = k('kFile'), DT = frame.contentWindow.DataTransfer; const dt = new DT(); dt.items.add(f);
+async function feed(f) { await ensureKaraoke(); try { if (self.__pmLoad) self.__pmLoad.show('端末内で音声を読み取り中…', 0); } catch (e) {}
+  const inp = k('kFile'), DT = frame.contentWindow.DataTransfer; const dt = new DT(); dt.items.add(f);
   inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true })); }
 $('c-file').addEventListener('change', async (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return; await feed(f); });
 // 曲を選択：このファイルに入っている曲を、取り込みとまったく同じ流れ（伴奏入り→端末内で歌声分離→見本バー）に渡す
@@ -8763,9 +8764,87 @@ html.pm-app #combo-gauge .needle{width:16px;height:16px;border-width:2px;box-sha
 html.pm-app #combo-gauge .needle:before{width:2px;height:22px;top:-6px;left:5px}
 html.pm-app #combo-gauge .ticks{margin-top:6px;font-size:10px}
 html.pm-app #combo-gauge .disclaimer{margin:6px 0 0;font-size:10px;line-height:1.35}
+/* 2026-11-24: カラオケの素材取り込み中は、分析タブと同じ読み込み表示（スピナー・4pxバー・パーセント・中止）。判定・分離の動きは変えない。 */
+html.pm-app #pm-load{--accent:var(--pm-accent);--control:var(--pm-control);--text:var(--pm-text);--bborder:var(--pm-btn-border);position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:18px 16px;background:rgba(13,14,17,.78)}
+html.pm-app #pm-load[hidden]{display:none!important}
+html.pm-app #pm-load .pm-load-box{width:100%;max-width:340px;display:flex;flex-direction:column;gap:10px;background:var(--pm-panel,#17171c);border-radius:16px;padding:14px}
+html.pm-app #pm-load .caption{font-size:12px;line-height:1.5;margin:0;color:var(--text)}
+html.pm-app #pm-load .mono{font-variant-numeric:tabular-nums}
+html.pm-app #pm-load .progress{display:flex;align-items:center;gap:10px;font-size:12px}
+html.pm-app #pm-load .progress .bar{flex:1;height:4px;border-radius:2px;background:var(--control);position:relative;overflow:hidden}
+html.pm-app #pm-load .progress .bar::after{content:"";position:absolute;left:0;top:0;bottom:0;width:var(--p,0%);background:var(--accent);transition:width .15s}
+html.pm-app #pm-load .spinner{width:18px;height:18px;border-radius:50%;border:2px solid rgba(255,255,255,.2);border-top-color:#fff;animation:spin .9s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+html.pm-app #pm-load .sbtn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:12px 14px;border-radius:10px;border:1px solid var(--bborder);background:var(--control);color:var(--text);font-size:13px;line-height:1.2;cursor:pointer}
+html.pm-app #pm-load .sbtn.small{padding:6px 10px;font-size:12px}
+html.pm-app #pm-load-err{margin:6px 14px 0;font-size:12px;line-height:1.5;color:var(--pm-text)}
+html.pm-app #pm-load-err[hidden]{display:none!important}
+html.pm-app #combo.pm-loading #c-pick,html.pm-app #combo.pm-loading #c-songs,html.pm-app #combo.pm-loading #pm-sk-play,html.pm-app #combo.pm-loading #pm-sk-reset,html.pm-app #combo.pm-loading #c-score,html.pm-app #combo.pm-loading #pm-cscore,html.pm-app #combo.pm-loading #sk-pos,html.pm-app #combo.pm-loading #pm-pick-row,html.pm-app #combo.pm-loading #pm-vol{opacity:.4;pointer-events:none}
 `;
   document.body.appendChild(st); // 元の style より後ろに置く（同じ強さの指定はこちらが勝つ）
 }
+
+function loadUI() {
+  if ($('pm-load')) return;
+  const combo = $('combo'); if (!combo) return;
+  const iframe = () => $('kara-frame');
+  const kEl = (id) => { try { const d = iframe() && iframe().contentDocument; return d && d.getElementById(id); } catch (e) { return null; } };
+  const ov = document.createElement('div');
+  ov.id = 'pm-load'; ov.hidden = true; ov.setAttribute('role', 'status'); ov.setAttribute('aria-live', 'polite');
+  ov.innerHTML = '<div class="pm-load-box"><div class="caption" id="pm-load-text"></div><div class="progress" id="pm-load-wrap"><span class="spinner" aria-hidden="true"></span><div class="bar" id="pm-load-bar"></div><span id="pm-load-pct" class="caption mono">0%</span><button type="button" class="sbtn small" id="pm-load-cancel">中止</button></div></div>';
+  document.body.appendChild(ov);
+  const err = document.createElement('p');
+  err.id = 'pm-load-err'; err.className = 'caption'; err.hidden = true; err.setAttribute('role', 'status'); err.setAttribute('aria-live', 'polite');
+  const pickRow = $('pm-pick-row') || $('c-pick');
+  if (pickRow && pickRow.parentNode) pickRow.parentNode.insertBefore(err, pickRow.nextSibling);
+  else combo.insertBefore(err, combo.firstChild);
+  const setP = (u) => { const bar = $('pm-load-bar'), pct = $('pm-load-pct'); if (bar) bar.style.setProperty('--p', (u * 100).toFixed(0) + '%'); if (pct) pct.textContent = Math.round(u * 100) + '%'; };
+  const hideLoad = () => { ov.hidden = true; combo.classList.remove('pm-loading'); if ($('c-pick')) $('c-pick').disabled = false; };
+  const showLoad = (text, u) => {
+    ov.hidden = false; combo.classList.add('pm-loading'); if ($('c-pick')) $('c-pick').disabled = true;
+    err.hidden = true; err.textContent = '';
+    if (text) $('pm-load-text').textContent = text;
+    if (u != null) setP(u);
+  };
+  const showErr = (msg) => { hideLoad(); if (msg) { err.textContent = msg; err.hidden = false; } else { err.textContent = ''; err.hidden = true; } };
+  $('pm-load-cancel').onclick = () => { const b = kEl('kStop'); if (b) b.click(); };
+  const parseP = (text) => {
+    const t = text || '';
+    const m = t.match(/(\d+)\s*%\s*$/);
+    const pct = m ? Number(m[1]) : null;
+    if (/見本の音程を解析中/.test(t)) return 0.72 + (pct == null ? 0 : pct / 100 * 0.28);
+    if (/歌声を分離中/.test(t)) return 0.12 + (pct == null ? 0 : pct / 100 * 0.60);
+    if (/分離を準備|分離モデルを準備|長い素材/.test(t)) return 0.10;
+    if (/読み取り中|音声を読み/.test(t)) return 0.04;
+    if (pct != null) return pct / 100;
+    return null;
+  };
+  let watching = false;
+  const tickLoad = () => {
+    let mode = '', text = '';
+    try {
+      const w = iframe() && iframe().contentWindow;
+      const st = w && w.__pmK && w.__pmK.state();
+      if (st) mode = st.mode || '';
+      const ks = kEl('kStatus'); if (ks) text = ks.textContent || '';
+    } catch (e) {}
+    if (mode === 'loading') {
+      watching = true;
+      showLoad(text || '端末内で音声を読み取り中…', parseP(text));
+    } else if (mode === 'ready' && (watching || !ov.hidden)) {
+      watching = false; hideLoad(); err.hidden = true; err.textContent = '';
+    } else if (!ov.hidden && mode === 'idle' && text && !/準備しました|素材を選ぶと/.test(text)) {
+      watching = false; showErr(text);
+    } else if (watching && mode && mode !== 'loading') {
+      watching = false;
+      if (text && !/準備しました|素材を選ぶと/.test(text)) showErr(text);
+      else hideLoad();
+    }
+  };
+  setInterval(tickLoad, 100);
+  self.__pmLoad = { show: showLoad, hide: hideLoad, err: showErr, tick: tickLoad };
+}
+
 function rangeFill() { for (const id of ['mx-v', 'mx-a']) { const r = $(id); if (!r) continue; const f = () => { const lo = Number(r.min) || 0, hi = Number(r.max) || 100; r.style.setProperty('--p', ((Number(r.value) - lo) / (hi - lo) * 100) + '%'); };
   if (!r.dataset.pmFill) { r.dataset.pmFill = '1'; r.addEventListener('input', f); r.addEventListener('change', f); } f(); } }
 function rankOf(v) { return v >= 98 ? ['SSS', '神がかった歌声！'] : v >= 95 ? ['SS', '最高の歌声！'] : v >= 90 ? ['S', 'すばらしい！'] : v >= 85 ? ['A+', 'とても上手！'] : v >= 80 ? ['A', '上手！'] : v >= 70 ? ['B', 'いい感じ！'] : v >= 60 ? ['C', 'その調子！'] : ['D', 'もう一度チャレンジ！']; }
@@ -8857,7 +8936,7 @@ function infoUI() {
     const r = document.createElement('div'); r.id = 'pm-cscore'; score.parentNode.insertBefore(r, score); r.appendChild(score); r.appendChild(infoBtn('採点する', true));
   }
 }
-function open() { tidy(); useDefaultMic(); styleApp(); layout(); infoUI(); rangeFill(); scoreScreen(); { const cm = $('c-mic'); if (cm) cm.onclick = () => { useDefaultMic(); $('start').click(); }; } try { self.PMSingle.openCombo(); } catch (e) { const s = $('c-status'); if (s) s.textContent = 'カラオケを開けませんでした（' + (e && e.message || e) + '）'; } }
+function open() { tidy(); useDefaultMic(); styleApp(); layout(); infoUI(); loadUI(); rangeFill(); scoreScreen(); { const cm = $('c-mic'); if (cm) cm.onclick = () => { useDefaultMic(); $('start').click(); }; } try { self.PMSingle.openCombo(); } catch (e) { const s = $('c-status'); if (s) s.textContent = 'カラオケを開けませんでした（' + (e && e.message || e) + '）'; } }
 if (document.readyState === 'complete') open(); else window.addEventListener('load', open);
 const combo = $('combo'); if (combo) combo.addEventListener('scroll', () => window.dispatchEvent(new Event('resize')), { passive: true });
 // タブを離れた時：マイクとカラオケの再生を止める（採点はしない）
