@@ -130,9 +130,10 @@ body.has-banner #tabbar{padding-bottom:0}
 .ad-banner{display:flex;align-items:center;justify-content:center;gap:8px;background:var(--panel);border:1px dashed rgba(255,255,255,.25)}
 .ad-ph{font-size:11px;color:var(--muted)}
 .ad-inter{position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center}
-.ad-inter-box{width:min(92vw,420px);aspect-ratio:9/14;max-height:86vh;background:var(--panel);border:1px dashed rgba(255,255,255,.3);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:12px;align-items:flex-start}
+.ad-inter-box{position:relative;width:min(92vw,420px);aspect-ratio:9/14;max-height:86vh;background:var(--panel);border:1px dashed rgba(255,255,255,.3);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:12px;align-items:flex-start}
 .ad-inter-body{flex:1;align-self:stretch;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);font-size:15px;line-height:1.6}
 .ad-inter-box .sbtn{align-self:stretch}
+.ad-inter-box .xbtn{position:absolute;top:8px;right:8px}
 /* その他 */
 .rowlink{display:flex;align-items:center;justify-content:space-between;width:100%;min-height:44px;padding:12px 0;background:none;border:0;font-size:15px;color:var(--text);text-decoration:none;cursor:pointer;text-align:left}
 .rico{width:20px;height:20px;color:var(--pink)}.rchev{width:14px;height:14px;color:var(--muted)}
