@@ -222,7 +222,7 @@
 
 <!-- 全画面（FullscreenPlayback） -->
 <div id="fs" class="fs" hidden role="dialog" aria-modal="true" aria-label="全画面">
-  <div class="fs-close"><span class="spacer"></span><button class="sbtn" id="fsClose">閉じる</button><button class="info" data-info="全画面" aria-label="全画面の説明"><svg><use href="#i-info"/></svg></button></div>
+  <div class="fs-close"><span class="spacer"></span><button class="xbtn" id="fsClose" type="button" aria-label="閉じる"><svg><use href="#i-x"/></svg></button><button class="info" data-info="全画面" aria-label="全画面の説明"><svg><use href="#i-info"/></svg></button></div>
   <div class="fs-stage" id="fsStage"></div>
   <div class="fs-controls">
     <div class="caption mono center" id="fsTime">00:00 / 00:00</div>
@@ -236,7 +236,7 @@
   <div class="plan-inner">
     <div class="row top">
       <div><div class="eyebrow pinkText bold">PITCH METER</div><div class="plan-title accentText">有料プラン</div></div>
-      <span class="spacer"></span><button class="sbtn icon" id="planClose" aria-label="閉じる"><svg><use href="#i-x"/></svg></button>
+      <span class="spacer"></span><button class="xbtn" id="planClose" type="button" aria-label="閉じる"><svg><use href="#i-x"/></svg></button>
     </div>
     <p class="sub">使い方に合わせて Full / Plus を選べます。</p>
     <div class="plancard full">
@@ -262,7 +262,7 @@
 <!-- 使い方（LocalUsageGuide） -->
 <div id="guide" class="fullcover guide-bg" hidden role="dialog" aria-modal="true" aria-labelledby="guideTitle">
   <div class="guide-inner">
-    <div class="row"><strong id="guideTitle">使い方</strong><span class="spacer"></span><button class="sbtn" id="guideClose">閉じる</button></div>
+    <div class="row"><strong id="guideTitle">使い方</strong><span class="spacer"></span><button class="xbtn" id="guideClose" type="button" aria-label="閉じる"><svg><use href="#i-x"/></svg></button></div>
     <div class="guide-body">
       <p>動画・音声を選び、素材を端末内で解析します。</p>
       <p>Fullは先頭300秒、Plusは先頭90秒。無料は先頭40秒です。</p>
@@ -276,20 +276,20 @@
 <!-- 説明（StudioInformationModal） -->
 <div id="infoModal" class="infomodal" hidden role="dialog" aria-modal="true" aria-labelledby="infoTitle">
   <div class="infobox">
-    <div class="row"><strong id="infoTitle"></strong><span class="spacer"></span><button class="xbtn" id="infoClose" aria-label="説明を閉じる"><svg><use href="#i-x"/></svg></button></div>
+    <div class="row"><strong id="infoTitle"></strong><span class="spacer"></span><button class="xbtn" id="infoClose" type="button" aria-label="閉じる"><svg><use href="#i-x"/></svg></button></div>
     <p id="infoText"></p>
   </div>
 </div>
 
 <!-- インタースティシャル広告枠 -->
 <div id="adInterstitial" class="ad-inter" hidden role="dialog" aria-modal="true" aria-label="広告">
-  <div class="ad-inter-box"><span class="ad-badge">広告</span><div class="ad-inter-body">広告枠（全画面）<br><small>ウェブ版は枠のみです。広告は読み込みません。</small></div><button class="sbtn" id="adInterClose">閉じる</button></div>
+  <div class="ad-inter-box"><span class="ad-badge">広告</span><div class="ad-inter-body">広告枠（全画面）<br><small>ウェブ版は枠のみです。広告は読み込みません。</small></div><button class="xbtn" id="adInterClose" type="button" aria-label="閉じる"><svg><use href="#i-x"/></svg></button></div>
 </div>
 
 <!-- サポート（FeedbackPanel）・ライセンス（LicenseReader）・利用規約/プライバシー -->
 <div id="sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
   <div class="sheetBody">
-    <div class="navbar"><span class="spacer"></span><strong id="sheetTitle"></strong><span class="spacer"></span><button class="plain pinkText" id="sheetClose">閉じる</button></div>
+    <div class="navbar"><span class="spacer"></span><strong id="sheetTitle"></strong><span class="spacer"></span><button class="xbtn" id="sheetClose" type="button" aria-label="閉じる"><svg><use href="#i-x"/></svg></button></div>
     <div id="sheetContent"></div>
   </div>
 </div>
@@ -326,7 +326,7 @@
 
 <div id="recSheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="recTitle">
   <div class="sheetBody rec-sheet">
-    <div class="row"><strong id="recTitle">サンプル音声を追加</strong><button class="info sm" data-info="サンプル音声を追加" aria-label="サンプル音声を追加の説明"><svg><use href="#i-info"/></svg></button><span class="spacer"></span><button class="btn small" id="recClose">閉じる</button></div>
+    <div class="row"><strong id="recTitle">サンプル音声を追加</strong><button class="info sm" data-info="サンプル音声を追加" aria-label="サンプル音声を追加の説明"><svg><use href="#i-info"/></svg></button><span class="spacer"></span><button class="xbtn" id="recClose" type="button" aria-label="閉じる"><svg><use href="#i-x"/></svg></button></div>
     <div class="smp-switch-row card-like" id="smpApplyRow" hidden><span class="smp-switch-label" id="smpApplyLabel">サンプル音声を適用</span><button class="info sm" id="smpApplyInfo" data-info-title="サンプル音声を適用" data-info-text="" aria-label="サンプル音声を適用の説明"><svg><use href="#i-info"/></svg></button><span class="spacer"></span>
       <label class="switch"><input type="checkbox" role="switch" id="smpApply" aria-labelledby="smpApplyLabel"><i></i></label></div>
     <p class="caption smp-apply-desc" id="smpApplyDesc" hidden></p>
@@ -348,7 +348,7 @@
 <!-- 判定用の声を集める（地声・裏声）: 音声は端末内の IndexedDB にだけ保存。まとめて保存は端末へのファイル保存のみ -->
 <div id="colSheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="colTitle">
   <div class="sheetBody rec-sheet col-sheet">
-    <div class="row"><strong id="colTitle">判定用の声を集める</strong><span class="spacer"></span><button class="btn small" id="colClose">閉じる</button></div>
+    <div class="row"><strong id="colTitle">判定用の声を集める</strong><span class="spacer"></span><button class="xbtn" id="colClose" type="button" aria-label="閉じる"><svg><use href="#i-x"/></svg></button></div>
     <div class="col-seg" role="radiogroup" aria-label="録る声の種類">
       <button class="orient on" role="radio" aria-checked="true" data-cat="chest" id="colCatChest">地声</button>
       <button class="orient" role="radio" aria-checked="false" data-cat="falsetto" id="colCatFals">裏声</button>
