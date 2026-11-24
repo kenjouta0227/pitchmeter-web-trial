@@ -8669,7 +8669,7 @@ function layout() {
 // アプリ版のみ（2026-11-23 けんじょうさん指示）：見た目だけ。
 // (3) 再生・停止・リセットの文字をボタンの中に収める（小さい iPhone でも）。(4) 歌声・伴奏のスライダーを今の半分の大きさに
 //     （線の太さ・つまみ・行の高さ）。触れる範囲は見えない余白で確保。範囲・初期値・動きはそのまま。
-// (5)「★ 採点する」→ 結果の画面に切り替えて大きな点数を出す（暗い背景・カウントアップ・ランクとひとこと・もう一度／右下と右上の ✕）。
+// (5)「★ 採点する」→ 結果の画面に切り替えて大きな点数を出す（暗い背景・カウントアップ・ランクとひとこと・もう一度／閉じる、右上に ✕）。
 //     点数は LIVE の採点結果（kResult）を読むだけで、計算はしない。今のバーの右の SCORE 表示もそのまま残す。
 function styleApp() {
   if ($('pm-app-style2')) return;
@@ -8724,7 +8724,6 @@ html.pm-app #pm-vol input[type=range]:disabled{opacity:.4;cursor:default}
 #pm-result .pmr-btns button{min-width:128px;min-height:48px;border-radius:24px;border:0;font:700 16px/1 -apple-system,BlinkMacSystemFont,'Hiragino Sans',sans-serif;cursor:pointer}
 #pm-result .pmr-btns .pmr-again{background:linear-gradient(90deg,#bb7ce8,#f285be);color:#221628;box-shadow:0 4px 14px rgba(187,124,232,.45)}
 #pm-result .pmr-btns .pmr-close{background:#25232a;color:#ececef;box-shadow:inset 0 0 0 1px #48434e}
-#pm-result .pmr-btns .pmr-close.xbtn{width:44px;height:44px;min-width:44px;min-height:44px;padding:0;border:0;border-radius:0;background:none;color:#ececef;box-shadow:none;font:inherit}#pm-result .pmr-btns .pmr-close.xbtn svg{width:16px;height:16px}
 #pm-result.pmr-bad .pmr-big,#pm-result.pmr-bad .pmr-gauge,#pm-result.pmr-bad .pmr-rank{display:none}
 @media (prefers-reduced-motion:reduce){#pm-result::before{animation:none}}
 /* 2026-11-24：1画面にカラオケバー＋メーターを収める。ツマミと再生位置を小さく、音量は再生位置の下、メーターは見本（いまの声）くらいの高さに。バー126pxと音程バーの太さは変えない。判定・文面は変えない。 */
@@ -8887,7 +8886,7 @@ function showResult() { // LIVE の採点結果（kResult）を読むだけ。�
     const box = document.createElement('div'); box.id = 'pm-result'; box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-label', '採点結果');
     box.innerHTML = '<button class="pmr-x" type="button" aria-label="閉じる">✕</button><div class="pmr-cap">SCORE</div><div class="pmr-phase">採点中…</div>'
       + '<div class="pmr-big" aria-live="off"><span class="n">0</span><span class="d">.000</span><span class="u">点</span></div><div class="pmr-gauge"><i></i></div>'
-      + '<div class="pmr-rank"></div><div class="pmr-msg"></div><div class="pmr-sub"></div><div class="pmr-btns"><button class="pmr-again" type="button">もう一度</button><button class="pmr-close xbtn" type="button" aria-label="閉じる"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button></div>';
+      + '<div class="pmr-rank"></div><div class="pmr-msg"></div><div class="pmr-sub"></div><div class="pmr-btns"><button class="pmr-again" type="button">もう一度</button><button class="pmr-close" type="button">閉じる</button></div>';
     document.body.appendChild(box);
     box.querySelector('.pmr-x').onclick = closeResult; box.querySelector('.pmr-close').onclick = closeResult;
     box.querySelector('.pmr-again').onclick = () => { closeResult(); const r = $('pm-sk-reset'); if (r && !r.disabled) r.click(); setTimeout(() => { const p = $('pm-sk-play'); if (p && !p.disabled) p.click(); }, 400); };
