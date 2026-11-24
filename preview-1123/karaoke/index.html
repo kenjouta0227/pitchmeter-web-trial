@@ -8669,7 +8669,7 @@ function layout() {
 // アプリ版のみ（2026-11-23 けんじょうさん指示）：見た目だけ。
 // (3) 再生・停止・リセットの文字をボタンの中に収める（小さい iPhone でも）。(4) 歌声・伴奏のスライダーを今の半分の大きさに
 //     （線の太さ・つまみ・行の高さ）。触れる範囲は見えない余白で確保。範囲・初期値・動きはそのまま。
-// (5)「★ 採点する」→ 結果の画面に切り替えて大きな点数を出す（暗い背景・カウントアップ・ランクとひとこと・もう一度／閉じる、右上に ✕）。
+// (5)「★ 採点する」→ 結果の画面に切り替えて大きな点数を出す（暗い背景・カウントアップ・ランクとひとこと・もう一度／閉じる）。
 //     点数は LIVE の採点結果（kResult）を読むだけで、計算はしない。今のバーの右の SCORE 表示もそのまま残す。
 function styleApp() {
   if ($('pm-app-style2')) return;
@@ -8696,15 +8696,13 @@ html.pm-app #pm-vol input[type=range]::-moz-range-track{height:2px;border-radius
 html.pm-app #pm-vol input[type=range]::-moz-range-progress{height:2px;border-radius:1px;background:var(--pm-pink,#f285be)}
 html.pm-app #pm-vol input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:#fff;border:0;box-shadow:0 1px 3px rgba(0,0,0,.45)}
 html.pm-app #pm-vol input[type=range]:disabled{opacity:.4;cursor:default}
-#pm-result{position:fixed;inset:0;z-index:2147483000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:calc(56px + env(safe-area-inset-top,0px)) 22px calc(24px + env(safe-area-inset-bottom,0px));color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans',sans-serif;text-align:center;overflow:hidden;
+#pm-result{position:fixed;inset:0;z-index:2147483000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:calc(24px + env(safe-area-inset-top,0px)) 22px calc(24px + env(safe-area-inset-bottom,0px));color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans',sans-serif;text-align:center;overflow:hidden;
   background:radial-gradient(ellipse 80% 55% at 50% 38%,rgba(187,124,232,.32),rgba(13,14,17,0) 70%),radial-gradient(ellipse 60% 40% at 80% 0%,rgba(104,50,73,.9),rgba(104,50,73,0) 100%),rgba(8,8,12,.94);
   opacity:0;transform:scale(1.04);transition:opacity .35s ease,transform .35s ease}
 #pm-result.show{opacity:1;transform:none}
 #pm-result::before{content:"";position:absolute;inset:-50%;background:repeating-conic-gradient(from 0deg at 50% 50%,rgba(242,133,190,.07) 0 6deg,transparent 6deg 18deg);animation:pmRays 18s linear infinite;pointer-events:none}
 @keyframes pmRays{to{transform:rotate(360deg)}}
 #pm-result > *{position:relative}
-#pm-result .pmr-x{position:absolute;top:calc(8px + env(safe-area-inset-top,0px));right:8px;width:48px;height:48px;border:0;border-radius:50%;background:rgba(255,255,255,.08);color:#fff;font-size:22px;line-height:48px;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
-#pm-result .pmr-x:active{background:rgba(255,255,255,.18)}
 #pm-result .pmr-cap{font-size:13px;letter-spacing:.45em;color:#f285be;font-weight:700;padding-left:.45em}
 #pm-result .pmr-phase{font-size:15px;color:#ececef;min-height:20px;letter-spacing:.1em}
 #pm-result .pmr-big{display:flex;align-items:baseline;justify-content:center;gap:6px;font-variant-numeric:tabular-nums;line-height:1}
@@ -8884,15 +8882,15 @@ function showResult() { // LIVE の採点結果（kResult）を読むだけ。�
     const old = $('pm-result'); if (old) old.remove();
     const m = txt.match(/^\s*(\d+)\s*点/), base = txt.match(/基礎\s*(\d+)\s*点/), bonus = txt.match(/加点\s*(\d+)\s*点/);
     const box = document.createElement('div'); box.id = 'pm-result'; box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-label', '採点結果');
-    box.innerHTML = '<button class="pmr-x" type="button" aria-label="閉じる">✕</button><div class="pmr-cap">SCORE</div><div class="pmr-phase">採点中…</div>'
+    box.innerHTML = '<div class="pmr-cap">SCORE</div><div class="pmr-phase">採点中…</div>'
       + '<div class="pmr-big" aria-live="off"><span class="n">0</span><span class="d">.000</span><span class="u">点</span></div><div class="pmr-gauge"><i></i></div>'
       + '<div class="pmr-rank"></div><div class="pmr-msg"></div><div class="pmr-sub"></div><div class="pmr-btns"><button class="pmr-again" type="button">もう一度</button><button class="pmr-close" type="button">閉じる</button></div>';
     document.body.appendChild(box);
-    box.querySelector('.pmr-x').onclick = closeResult; box.querySelector('.pmr-close').onclick = closeResult;
+    box.querySelector('.pmr-close').onclick = closeResult;
     box.querySelector('.pmr-again').onclick = () => { closeResult(); const r = $('pm-sk-reset'); if (r && !r.disabled) r.click(); setTimeout(() => { const p = $('pm-sk-play'); if (p && !p.disabled) p.click(); }, 400); };
     requestAnimationFrame(() => box.classList.add('show'));
     const on = (sel) => box.querySelector(sel).classList.add('on');
-    if (!m) { box.classList.add('pmr-bad'); box.querySelector('.pmr-phase').textContent = ''; const g = box.querySelector('.pmr-msg'); g.textContent = txt.slice(0, 80); on('.pmr-msg'); on('.pmr-btns'); setTimeout(() => box.querySelector('.pmr-x').focus(), 50); return; }
+    if (!m) { box.classList.add('pmr-bad'); box.querySelector('.pmr-phase').textContent = ''; const g = box.querySelector('.pmr-msg'); g.textContent = txt.slice(0, 80); on('.pmr-msg'); on('.pmr-btns'); setTimeout(() => box.querySelector('.pmr-close').focus(), 50); return; }
     const score = Math.max(0, Math.min(100, Number(m[1]))), n = box.querySelector('.pmr-big .n'), dd = box.querySelector('.pmr-big .d'), bar = box.querySelector('.pmr-gauge i');
     const [rk, word] = rankOf(score);
     box.querySelector('.pmr-rank').textContent = rk; box.querySelector('.pmr-msg').textContent = word;
@@ -8905,7 +8903,7 @@ function showResult() { // LIVE の採点結果（kResult）を読むだけ。�
       n.textContent = String(Math.floor(v)); dd.textContent = p < 1 ? '.' + String(Math.floor((v % 1) * 1000)).padStart(3, '0') : ''; bar.style.width = v + '%';
       if (p < 1) { requestAnimationFrame(step); return; }
       n.textContent = String(score); on('.pmr-rank'); on('.pmr-msg'); on('.pmr-sub'); on('.pmr-btns'); };
-    requestAnimationFrame(step); setTimeout(() => box.querySelector('.pmr-x').focus({ preventScroll: true }), 50);
+    requestAnimationFrame(step); setTimeout(() => box.querySelector('.pmr-close').focus({ preventScroll: true }), 50);
   };
   setTimeout(wait, 120);
 }
