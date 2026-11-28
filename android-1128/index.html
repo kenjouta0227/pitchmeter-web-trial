@@ -98,7 +98,7 @@
       </div>
       <div class="caption" id="placeHint" hidden><div id="analysis-source-accuracy-note">※複数の音や声が重なっている素材や、歌声の音量が小さい素材は、正確に分析できないことがあります。</div><div>メーターをタップして位置・サイズ・角度を調整</div></div>
       <div class="usage-mix" id="mixUsage" hidden>
-        <div id="mixQuota" hidden aria-live="polite">無料版でのミックスボイス判定は月に5回までです<strong id="mixUsesLeft">残り5回</strong></div>
+        <div id="mixQuota" hidden aria-live="polite"><span id="mixQuotaLabel">無料版でのミックスボイス判定は月に5回までです</span><strong id="mixUsesLeft">残り5回</strong></div>
         <p id="mixAccess" class="caption" aria-live="polite"></p>
         <button type="button" class="sbtn primary" id="mixReveal" hidden>ミックスボイス判定を表示</button>
       </div>
@@ -190,7 +190,7 @@
     <div class="meterCard" id="liveCard"><div class="meterHead"><span class="meterCap">いまの声</span><span class="spacer"></span><span class="regChip" id="liveChip" data-reg="0" aria-live="polite"><i aria-hidden="true"></i><b id="liveChipText">—</b></span></div>
     <div class="meterBox"><canvas id="liveCanvas" width="1080" height="330" aria-label="ピッチメーター"></canvas></div>
       <div class="usage-live" id="liveUsage" aria-live="polite">
-        <div>無料版では月に5回使えます</div><strong class="accentText">残り<span id="liveUsesLeft">5</span>回</strong>
+        <div id="liveUsageLabel">無料版では月に5回使えます</div><strong class="accentText">残り<span id="liveUsesLeft">5</span>回</strong>
       </div></div>
     <div class="row status"><i class="dot" id="liveDot"></i><strong id="liveStatus">停止中</strong><span class="spacer"></span><span class="foot muted ell" id="liveInput">マイク未使用</span></div>
     <div class="foot notice" id="liveNotice" hidden></div>
@@ -264,7 +264,7 @@
     </div>
     <div class="plancard plus">
       <div class="row g10"><svg class="pico"><use href="#i-layers"/></svg><span class="ptitle">Plus</span><span class="ptag">標準プラン</span></div>
-      <ul class="feat"><li>最大90秒までの書き出し</li><li>自動での音域設定が可能</li><li>リアルタイム（回数制限なし）</li><li>透過メーターのみの書き出し</li><li>開発者アイコンの表示切替</li></ul>
+      <ul class="feat"><li>最大90秒までの書き出し</li><li>自動での音域設定が可能</li><li>リアルタイム（回数制限なし）</li><li>リアルタイムのミックスボイス判定（月15回）</li><li>素材のミックスボイス判定（月15回）</li><li>透過メーターのみの書き出し</li><li>開発者アイコンの表示切替</li></ul>
       <hr><div class="row base"><span class="caption">月額</span><span class="price">¥1,480</span><span class="spacer"></span><button class="sbtn whiteb" data-review="Plus">Plusを確認 ›</button></div>
     </div>
     <button class="sbtn wide" disabled><svg class="ico"><use href="#i-restore"/></svg>購入を復元</button>
@@ -413,7 +413,7 @@
 <script src="meter-labels.js?v=20261128and1128"></script>
 <script src="gauge.js?v=20261128and1128"></script>
 <script src="alphamov.js?v=20261128and1128"></script>
-<script src="usage-preview.js?v=20261128and1128"></script>
-<script src="app.js?v=20261128and1128"></script>
+<script src="usage-preview.js?v=20261128plusmix15"></script>
+<script src="app.js?v=20261128plusmix15"></script>
 </body>
 </html>

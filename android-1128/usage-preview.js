@@ -9,22 +9,26 @@
   function make(storage, tabStorage, now = () => new Date(), lock = null) {
     let tier = 'free', session = null;
     try { const t = tabStorage.getItem(PLAN); if (t === 'full' || t === 'plus') tier = t; } catch (_) {}
-    const defaults = () => ({ monthly: {}, ads: {}, scores: {}, pending: {}, mixMonthly: {}, mixResults: {} });
-    const read = () => { const s = storage.getItem(KEY); if (s === null) return defaults(); const x = JSON.parse(s); if (!x || !['monthly','ads','scores','pending'].every(k => x[k] && typeof x[k]==='object' && !Array.isArray(x[k]))) throw Error('usage storage'); for (const k of ['mixMonthly','mixResults']) { if (!(k in x)) x[k]={}; if (!x[k] || typeof x[k]!=='object' || Array.isArray(x[k])) throw Error('usage storage'); } return x; };
+    const defaults = () => ({ monthly: {}, ads: {}, scores: {}, pending: {}, mixMonthly: {}, mixResults: {}, liveMixMonthly: {} });
+    const read = () => { const s = storage.getItem(KEY); if (s === null) return defaults(); const x = JSON.parse(s); if (!x || !['monthly','ads','scores','pending'].every(k => x[k] && typeof x[k]==='object' && !Array.isArray(x[k]))) throw Error('usage storage'); for (const k of ['mixMonthly','mixResults','liveMixMonthly']) { if (!(k in x)) x[k]={}; if (!x[k] || typeof x[k]!=='object' || Array.isArray(x[k])) throw Error('usage storage'); } return x; };
     function edit(fn) { const d = read(), result = fn(d); if (result !== false) storage.setItem(KEY, JSON.stringify(d)); return result; }
     const change = fn => lock ? lock.request(KEY, () => edit(fn)) : Promise.resolve().then(() => edit(fn));
     const liveAds = d => Object.keys(d.ads).filter(id => d.ads[id].live === null);
     const karaAds = d => Object.keys(d.ads).filter(id => d.ads[id].kara === null);
     const mixAds = d => Object.keys(d.ads).filter(id => d.ads[id].mix === null);
-    const mixBase = (d,p) => Math.max(0, 5 - (d.mixMonthly[p] || 0));
+    const mixCap = () => (tier === 'plus' ? 15 : 5);
+    const mixBase = (d,p) => Math.max(0, mixCap() - (d.mixMonthly[p] || 0));
+    const liveMixBase = (d,p) => Math.max(0, 15 - (d.liveMixMonthly[p] || 0));
     const base = (d, p) => Math.max(0, 5 - (d.monthly[p] || 0));
     function state() {
       try {
         const d = read(), p = month(now()), a = session && d.pending[session];
-        return { tier, live: base(d,p) + liveAds(d).length + (a && (a.kind==='ad' || a.period===p) ? 1 : 0), karaoke: karaAds(d).length, mix: mixBase(d,p) + mixAds(d).length, active: !!a, available: true };
-      } catch (_) { return {tier,live:0,karaoke:0,mix:0,active:false,available:false}; }
+        return { tier, live: base(d,p) + liveAds(d).length + (a && (a.kind==='ad' || a.period===p) ? 1 : 0), karaoke: karaAds(d).length, mix: mixBase(d,p) + (tier==='plus' ? 0 : mixAds(d).length), liveMix: liveMixBase(d,p), active: !!a, available: true };
+      } catch (_) { return {tier,live:0,karaoke:0,mix:0,liveMix:0,active:false,available:false}; }
     }
+    let liveMixSession = null;
     function finishLive() {
+      liveMixSession = null;
       if (session) {
         const id = session; session = null;
         // The quota is already reserved durably. If close cannot run, the next page still sees the debit.
@@ -60,24 +64,41 @@
         }).then(r => { if (r && r.id) { session=r.id; try { tabStorage.setItem(PREV,session); } catch (_) {} if (!stillWanted()) { finishLive(); return false; } } return !!r; }); }
         catch (_) { return false; }
       },
+      async useLiveMix(stillWanted=()=>true) {
+        if (!stillWanted()) return false;
+        if (tier==='full' || tier==='free') return true;
+        if (tier!=='plus') return false;
+        if (liveMixSession) return true;
+        try { return await change(d => {
+          if (!stillWanted() || tier!=='plus') return false;
+          if (liveMixSession) return true;
+          const p=month(now());
+          if (liveMixBase(d,p)<=0) return false;
+          d.liveMixMonthly[p]=(d.liveMixMonthly[p]||0)+1;
+          return {id: uuid()};
+        }).then(r => { if (r && r.id) liveMixSession=r.id; return !!r; }); }
+        catch (_) { return false; }
+      },
       async earn(id) {
         if (!identity(id) || tier!=='free') return false;
         try { return !!(await change(d => { if (tier!=='free' || d.ads[id]) return false; d.ads[id]={live:null,kara:null,mix:null}; return true; })); } catch (_) { return false; }
       },
       hasMixResult(id) {
-        if (!identity(id) || tier!=='free') return false;
+        if (!identity(id) || (tier!=='free' && tier!=='plus')) return false;
         try { return Object.hasOwn(read().mixResults, id); } catch (_) { return false; }
       },
       async revealMix(id, isShowing=()=>true) {
         if (!identity(id) || !isShowing()) return false;
         if (tier==='full') return true;
-        if (tier!=='free') return false;
+        if (tier!=='free' && tier!=='plus') return false;
         try { return !!(await change(d => {
-          if (!isShowing() || tier==='plus') return false;
+          if (!isShowing()) return false;
           if (tier==='full' || Object.hasOwn(d.mixResults,id)) return true;
+          if (tier!=='free' && tier!=='plus') return false;
           const p=month(now());
           if (mixBase(d,p)>0) d.mixMonthly[p]=(d.mixMonthly[p]||0)+1;
-          else { const ad=mixAds(d)[0]; if (!ad) return false; d.ads[ad].mix=id; }
+          else if (tier==='free') { const ad=mixAds(d)[0]; if (!ad) return false; d.ads[ad].mix=id; }
+          else return false;
           d.mixResults[id]=p;
           return true;
         })); } catch (_) { return false; }

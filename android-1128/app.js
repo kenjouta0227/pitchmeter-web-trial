@@ -30,8 +30,10 @@ let karaokeResult = false;
 const storageBoundary = get => ({getItem:k=>get().getItem(k),setItem:(k,v)=>get().setItem(k,v),removeItem:k=>get().removeItem(k)});
 const usage = PMUsagePreview.make(storageBoundary(()=>localStorage),storageBoundary(()=>sessionStorage),()=>new Date(),navigator.locks);
 function paintUsage(running = !!$('liveToggle').classList.contains('running')) {
-  const s = usage.state(), free=s.tier==='free', access=usage.canKaraoke();
-  $('liveUsage').hidden=!free; $('liveUsesLeft').textContent=s.live;
+  const s = usage.state(), free=s.tier==='free', plus=s.tier==='plus', access=usage.canKaraoke();
+  $('liveUsage').hidden=!(free||plus);
+  $('liveUsageLabel').textContent=plus ? 'Plusでのリアルタイムのミックスボイス判定は月に15回までです' : '無料版では月に5回使えます';
+  $('liveUsesLeft').textContent=plus ? s.liveMix : s.live;
   $('liveToggle').disabled=!running&&!usage.canStart();
   $('karaUsageGate').hidden=access||karaokeResult; $('karaUsageShell').hidden=!(access||karaokeResult);
   $('karaUsageBalance').textContent=free ? 'カラオケ採点：残り' + s.karaoke + '回。結果表示で1回消費します。' : 'Full（動作確認用）';
@@ -156,7 +158,7 @@ const samples = (() => {
 
 // ---------- ⓘ 説明（StudioInformationModal / operationDetails） ----------
 const INFO = {
-  '利用回数': '通常の音程メーターと書き出しは回数制限なし。素材のミックスボイス判定は無料で月5回（リアルタイムとは別枠）で、判定結果の表示時にだけ1回消費します。\nリアルタイムは無料で月5回。マイクを使ったあと、右上の×またはページの終了で1回消費します。\n広告で得たカラオケのお試しは、採点結果が表示されたときだけ1回消費します。',
+  '利用回数': '通常の音程メーターと書き出しは回数制限なし。素材のミックスボイス判定は無料で月5回、Plusで月15回（リアルタイムとは別枠）で、判定結果の表示時にだけ1回消費します。Fullは回数制限なく使えます。\nリアルタイムは無料で月5回。マイクを使ったあと、右上の×またはページの終了で1回消費します。PlusとFullはリアルタイム自体を回数制限なく使えます。Plusのリアルタイムのミックスボイス判定は月15回で、判定を使ったセッションで1回消費します。残り0回でもリアルタイム（音程など）は使えますが、判定は表示されません。\n広告で得たカラオケのお試しは、採点結果が表示されたときだけ1回消費します。',
   'Fullでできること': '最大300秒の書き出し、自動・手動音域、縦メーター、出力音声の選択に加え、リアルタイムを回数制限なく利用でき、カラオケ採点と素材のミックスボイス判定も回数制限なく使えます。購入条件はプラン・購入で確認できます。',
   '歌声補正': '原音・歌声・保守的補完から解析方法を選びます。変更後は再解析で確認してください。',
   '音声': '動画に含める音声を選びます。抽出歌声・伴奏は対応する分離結果が必要です。',
@@ -315,16 +317,19 @@ const file = (() => {
     mixHasResult=mixResultExists(); mixFailure='';
   }
   function refreshMix() {
-    const s=usage.state(), free=s.tier==='free';
-    const shown=!!(ready && mixHasResult && (s.tier==='full' || (free && usage.hasMixResult(mixId))));
+    const s=usage.state(), free=s.tier==='free', limited=free||s.tier==='plus';
+    const shown=!!(ready && mixHasResult && (s.tier==='full' || (limited && usage.hasMixResult(mixId))));
     const changed=shown!==mixVisible; mixVisible=shown;
     $('mixUsage').hidden=!(ready && mixId);
-    $('mixQuota').hidden=!free; $('mixUsesLeft').textContent='残り'+s.mix+'回';
-    $('mixReveal').hidden=!free || shown || !mixHasResult;
+    $('mixQuota').hidden=!limited;
+    $('mixQuotaLabel').textContent=s.tier==='plus' ? 'Plusでのミックスボイス判定は月に15回までです' : '無料版でのミックスボイス判定は月に5回までです';
+    $('mixUsesLeft').textContent='残り'+s.mix+'回';
+    $('mixReveal').hidden=!limited || shown || !mixHasResult;
     $('mixReveal').disabled=!!task || mixWorking || !s.mix;
     $('mixAccess').textContent=!ready ? '' : !mixHasResult ? 'この素材ではミックスボイス判定を表示できませんでした。' :
-      shown ? 'ミックスボイス判定を表示中' : s.tier==='plus' ? '素材のミックスボイス判定を回数制限なく使えるのはFullです。' :
-      mixFailure || (!s.mix ? '試作広告の視聴で判定を1回追加できます。音程メーターは引き続き使えます。' : '');
+      shown ? 'ミックスボイス判定を表示中' :
+      !s.mix ? (s.tier==='plus' ? '今月の素材ミックスボイス判定の残り回数がありません。' : '試作広告の視聴で判定を1回追加できます。音程メーターは引き続き使えます。') :
+      mixFailure || '';
     if (changed && ready) {
       if (!shown && output && output.kind!=='audio') { output=null; $('shareBtn').hidden=true; $('outDesc').hidden=true; }
       rebuildTimeline();
@@ -910,7 +915,8 @@ const live = (() => {
   const notice = (s) => { $('liveNotice').hidden = !s; $('liveNotice').textContent = s || ''; };
   function setButton() { const b = $('liveToggle'); b.classList.toggle('running', running); $('liveCard').classList.toggle('on', running); $('liveToggleText').textContent = running ? '停止' : '開始'; $('liveToggleIco').textContent = running ? '■' : '●'; b.setAttribute('aria-label', running ? 'リアルタイム表示を停止' : 'リアルタイム表示を開始'); paintUsage(running); }
   let chipReg = -1; // 表示だけ: メーターが今出しているラベルをチップにも出す（判定には戻さない）
-  function chip(state) { const r = state && self.PMMeterLabels.active(C.REG_LABEL[state.register], state.readoutAlpha) ? (state.register | 0) : 0; const code = r === 4 ? 1 : r; if (code === chipReg) return; chipReg = code;
+  let liveMixOn = false;
+  function chip(state) { if (!liveMixOn) state = null; const r = state && self.PMMeterLabels.active(C.REG_LABEL[state.register], state.readoutAlpha) ? (state.register | 0) : 0; const code = r === 4 ? 1 : r; if (code === chipReg) return; chipReg = code;
     const el = $('liveChip'); el.dataset.reg = String(code); $('liveChipText').textContent = C.REG_LABEL[code] || '—'; }
   function draw(state) { const [w, h] = [cv.width, cv.height]; G.render(cv.getContext('2d'), w, h, state || G.emptyState(), tl ? tl.range : lastRange, false); chip(state); }
   const isIOS = () => /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -941,7 +947,7 @@ const live = (() => {
       devHandler = () => stop('マイクの接続が変わったので停止しました。もう一度「開始」を押してください。');
       if (navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', devHandler);
       worker = new Worker('worker.js?v=20261128and1128'); tl = new C.GaugeTimeline([], C.defaultRange(), false); tl.frames = [];
-      worker.onmessage = (e) => { const m = e.data; if (m.type === 'liveFrames' && m.gen === my && running) tl.append(m.frames.map(([hz, register, sure]) => ({ hz, register, uraSure: !!sure }))); };
+      worker.onmessage = (e) => { const m = e.data; if (m.type === 'liveFrames' && m.gen === my && running) tl.append(m.frames.map(([hz, register, sure]) => ({ hz, register: liveMixOn ? register : C.REG.none, uraSure: !!(liveMixOn && sure) }))); };
       worker.postMessage({ type: 'liveStart', rate: ctx.sampleRate, personal: samples.personal() });
       src = ctx.createMediaStreamSource(stream);
       const sink = ctx.createGain(); sink.gain.value = 0; sink.connect(ctx.destination);
@@ -958,6 +964,10 @@ const live = (() => {
       const confirmed = await usage.startLive(() => my===gen && running && tab==='live' && !document.hidden);
       if (my!==gen) return;
       if (!confirmed) { fail('リアルタイムの残り回数を確認できませんでした'); return; }
+      const mixOk = await usage.useLiveMix(() => my===gen && running && tab==='live' && !document.hidden);
+      if (my!==gen) return;
+      liveMixOn = usage.state().tier!=='plus' || mixOk;
+      if (usage.state().tier==='plus' && !mixOk) notice('今月のリアルタイムのミックスボイス判定の残り回数がありません。');
       src.connect(node); node.connect(sink);
       paintUsage(true);
       ctx.onstatechange = () => { if (running && ctx && ctx.state === 'interrupted') stop('ほかの音声で中断されたので停止しました。'); };
@@ -998,6 +1008,7 @@ const live = (() => {
   function stop(message) {
     if (!running && !message) return;
     if (tl) lastRange = tl.range;
+    liveMixOn = false; chipReg = -1;
     teardown(); running = false; setButton(); setStatus('停止中'); $('liveInput').textContent = 'マイク未使用';
     if (message) notice(message);
     draw();
